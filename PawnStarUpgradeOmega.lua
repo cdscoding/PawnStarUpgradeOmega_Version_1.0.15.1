@@ -105,26 +105,32 @@ function GO:PlayUpgradeSound()
 end
 
 function GO:OnLoad()
-    -- Initialize saved variables with new Pawn tracking
-    if PawnStarOmegaDB == nil then
-        PawnStarOmegaDB = {
-            selectedPawnScale = "AUTO",
-            minimap = { hide = false },
-            soundEnabled = true,
-            debugMode = false,
-            hasShownPawnRecommendation = false,
-            firstTimeUser = true
-        }
-    end
+    -- Default database structure
+    local defaults = {
+        settings = {
+            showWelcomeWindow = true
+        },
+        selectedPawnScale = "AUTO",
+        minimap = { hide = false },
+        soundEnabled = true,
+        debugMode = false,
+        hasShownPawnRecommendation = false
+    }
 
-    -- Ensure all necessary variables exist
-    PawnStarOmegaDB.debugMode = PawnStarOmegaDB.debugMode or false
-    PawnStarOmegaDB.hasShownPawnRecommendation = PawnStarOmegaDB.hasShownPawnRecommendation or false
-    PawnStarOmegaDB.firstTimeUser = PawnStarOmegaDB.firstTimeUser ~= false -- Default to true
-    if PawnStarOmegaDB.selectedPawnScale == nil then
-        PawnStarOmegaDB.selectedPawnScale = "AUTO"
-    end
-    PawnStarOmegaDB.usePawn = nil -- Remove deprecated setting
+    -- Initialize or update the database
+    PawnStarOmegaDB = PawnStarOmegaDB or {}
+    if PawnStarOmegaDB.settings == nil then PawnStarOmegaDB.settings = {} end
+    
+    PawnStarOmegaDB.settings.showWelcomeWindow = (PawnStarOmegaDB.settings.showWelcomeWindow == nil) and defaults.settings.showWelcomeWindow or PawnStarOmegaDB.settings.showWelcomeWindow
+    PawnStarOmegaDB.selectedPawnScale = PawnStarOmegaDB.selectedPawnScale or defaults.selectedPawnScale
+    PawnStarOmegaDB.minimap = PawnStarOmegaDB.minimap or defaults.minimap
+    PawnStarOmegaDB.soundEnabled = (PawnStarOmegaDB.soundEnabled == nil) and defaults.soundEnabled or PawnStarOmegaDB.soundEnabled
+    PawnStarOmegaDB.debugMode = PawnStarOmegaDB.debugMode or defaults.debugMode
+    PawnStarOmegaDB.hasShownPawnRecommendation = PawnStarOmegaDB.hasShownPawnRecommendation or defaults.hasShownPawnRecommendation
+
+    -- Clean up old variables
+    PawnStarOmegaDB.firstTimeUser = nil
+    PawnStarOmegaDB.usePawn = nil
 
     self.playerClass = select(2, UnitClass("player"))
     self.playerSpec = GetSpecialization()
@@ -132,6 +138,11 @@ function GO:OnLoad()
     self:DebugPrint("OnLoad called.")
     self:DebugPrint("Player Class:", self.playerClass)
     self:DebugPrint("Player Spec ID:", self.playerSpec)
+
+    -- Initialize Welcome module
+    if self.Welcome and self.Welcome.OnInitialize then
+        self.Welcome:OnInitialize()
+    end
     
     -- Create main frame
     self.frame = CreateFrame("Frame", addonName .. "Frame", UIParent, "BasicFrameTemplateWithInset")
@@ -174,12 +185,6 @@ function GO:OnLoad()
     -- Create Minimap Icon
     self:CreateMinimapIcon()
 
-    -- Check for first-time user experience
-    if PawnStarOmegaDB.firstTimeUser then
-        self:ShowFirstTimeWelcome()
-        PawnStarOmegaDB.firstTimeUser = false
-    end
-
     -- Start timers
     self:StartArrowAnimation()
     self:StartScanning()
@@ -189,20 +194,11 @@ function GO:OnLoad()
           (self:IsPawnAvailable() and "Pawn integration active!" or "Consider installing Pawn for better accuracy."))
 end
 
-function GO:ShowFirstTimeWelcome()
-    -- Brief, friendly welcome for new users
-    C_Timer.After(3, function()
-        print("|cff00ff00Welcome to PawnStarUpgradeOmega!|r")
-        print("This addon automatically scans for gear upgrades every 6 seconds.")
-        if not self:IsPawnAvailable() then
-            print("For the most accurate results, consider installing the |cffffffff'Pawn'|r addon.")
-            print("Type |cffffffff/pawnstar options|r to learn more!")
-        else
-            print("Pawn detected - you're all set for maximum accuracy!")
-        end
-    end)
+function GO:WipeSavedVariables()
+    PawnStarOmegaDB = nil -- Clearing the variable will cause it to be re-initialized on reload
+    print("|cff00ff00" .. addonName .. ":|r All saved data has been deleted. Reloading UI.")
+    ReloadUI()
 end
-
 
 -- Icon Configuration Section
 function GO:CreateMinimapIcon()
@@ -511,6 +507,8 @@ end
 SLASH_PAWNSTAR1 = "/pawnstar"
 SLASH_PAWNSTAR2 = "/psuo"
 SlashCmdList["PAWNSTAR"] = function(msg)
+    msg = strtrim(msg):lower()
+
     if msg == "debug on" then
         PawnStarOmegaDB.debugMode = true
         print("|cff00ff00PawnStarUpgradeOmega:|r Debug mode ENABLED.")
@@ -522,7 +520,9 @@ SlashCmdList["PAWNSTAR"] = function(msg)
         print("Player class: " .. (GO.playerClass or "nil"))
         print("Player spec: " .. (GO.playerSpec or "nil"))
         print("Pawn available: " .. tostring(GO:IsPawnAvailable()))
-        print("Equipped items (" .. #GO.equippedGear .. "):")
+        local equippedCount = 0
+        for _ in pairs(GO.equippedGear) do equippedCount = equippedCount + 1 end
+        print("Equipped items (" .. equippedCount .. "):")
         for slot, item in pairs(GO.equippedGear) do
              print(string.format("  Slot %d: [%s], Score: %.2f", slot, item.link, item.score))
         end
@@ -533,8 +533,6 @@ SlashCmdList["PAWNSTAR"] = function(msg)
                 print(string.format("    Item %d: [%s] bag=%d slot=%d score=%.1f", i, item.link, item.bag, item.slot, item.score))
             end
         end
-    elseif msg == "options" then
-        GO:ToggleOptionsPanel()
     elseif msg == "pawn" then
         if GO:IsPawnAvailable() then
             print("|cff00ff00PawnStarUpgradeOmega:|r Pawn is installed and active!")
@@ -542,15 +540,8 @@ SlashCmdList["PAWNSTAR"] = function(msg)
             GO:ShowPawnRecommendation()
         end
     else
-        if GO.frame:IsShown() then
-            GO.frame:Hide()
-        else
-            GO:ScanGear()
-            if not GO.frame:IsShown() then
-                print("|cff00ff00PawnStar:|r No upgrades found. " .. 
-                      (GO:IsPawnAvailable() and "Your gear is optimized!" or "Install Pawn for more accurate recommendations."))
-            end
-        end
+        -- Default action for "", "options", or any other unrecognized command is to toggle the options panel.
+        GO:ToggleOptionsPanel()
     end
 end
 
@@ -573,8 +564,16 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
             end)
         end
     elseif event == "PLAYER_LOGIN" then
+        if PawnStarOmegaDB and PawnStarOmegaDB.settings and PawnStarOmegaDB.settings.showWelcomeWindow then
+            C_Timer.After(3, function()
+                if GO.Welcome and GO.Welcome.ShowWindow then
+                    GO.Welcome:ShowWindow()
+                end
+            end)
+        end
         C_Timer.After(5, function() GO:ScanGear() end)
     elseif event == "PLAYER_EQUIPMENT_CHANGED" or event == "BAG_UPDATE" then
         C_Timer.After(1.5, function() GO:ScanGear() end)
     end
 end)
+

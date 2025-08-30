@@ -17,3 +17,4 @@ Libs\LibDBIcon-1.0\LibDBIcon-1.0.lua
 PawnStarUpgradeOmega.lua
 StatWeights.lua
 Options.lua
+WelcomePSUO.lua
