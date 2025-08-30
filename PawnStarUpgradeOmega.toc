@@ -1,0 +1,19 @@
+## Interface: 110200
+## Title: PawnStar Upgrade Omega
+## Notes: PawnStarUpgradeOmega delivers advanced gear upgrade detection, immersive voice cues, dynamic popup alerts, and instant equip buttons when an upgrade is found. For optimal performance, pairing with Pawn is highly recommended.
+## Author: YourName
+## Version: 1.0.0
+## SavedVariables: PawnStarOmegaDB
+## IconTexture: Interface\AddOns\PawnStarUpgradeOmega\Media\arrowup3.tga
+## OptionalDeps: Pawn
+
+# Libraries
+Libs\LibStub\LibStub.lua
+Libs\CallbackHandler-1.0\CallbackHandler-1.0.lua
+Libs\LibDataBroker-1.1\LibDataBroker-1.1.lua
+Libs\LibDBIcon-1.0\LibDBIcon-1.0.lua
+
+# Core Files
+PawnStarUpgradeOmega.lua
+StatWeights.lua
+Options.lua
