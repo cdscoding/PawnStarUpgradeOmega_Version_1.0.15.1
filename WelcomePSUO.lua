@@ -7,7 +7,7 @@ local Welcome = GO.Welcome
 
 -- Constants for the popup window
 local WELCOME_WINDOW_WIDTH = 420
-local WELCOME_WINDOW_HEIGHT = 580 -- Increased height for new sections
+local WELCOME_WINDOW_HEIGHT = 690 -- Increased height for new sections
 local DISCORD_LOGO_PATH = "Interface\\AddOns\\PawnStarUpgradeOmega\\Media\\DiscordLogo.tga"
 local PATREON_LOGO_PATH = "Interface\\AddOns\\PawnStarUpgradeOmega\\Media\\PatreonLogo.tga"
 

@@ -9,14 +9,181 @@ function GO:UpdateOptionsPanel()
     local f = self.optionsFrame
     local minimapCheck = _G[addonName .. "MinimapCheck"]
     local soundCheck = _G[addonName .. "SoundCheck"]
+    local pauseInCombatCheck = _G[addonName .. "PauseInCombatCheck"]
+    local safeZonesOnlyCheck = _G[addonName .. "SafeZonesOnlyCheck"]
+    local ignoreBoECheck = _G[addonName .. "IgnoreBoECheck"]
+    local showOneRingCheck = _G[addonName .. "ShowOneRingCheck"]
 
     -- Set checkbox states
     minimapCheck:SetChecked(not PawnStarOmegaDB.minimap.hide)
     soundCheck:SetChecked(PawnStarOmegaDB.soundEnabled)
+    pauseInCombatCheck:SetChecked(PawnStarOmegaDB.pauseInCombat)
+    safeZonesOnlyCheck:SetChecked(PawnStarOmegaDB.safeZonesOnly)
+    ignoreBoECheck:SetChecked(PawnStarOmegaDB.ignoreBoE)
+    showOneRingCheck:SetChecked(PawnStarOmegaDB.showOneRing)
 
     -- Update Pawn status display
     self:UpdatePawnStatusDisplay()
     self:UpdateStatWeightsPanel()
+end
+
+-- Helper function to check if player is in combat
+function GO:IsInCombat()
+    return InCombatLockdown()
+end
+
+-- Helper function to check if player is in a safe zone (rest area)
+function GO:IsInSafeZone()
+    return IsResting()
+end
+
+-- Helper function to check if an item is Bind on Equip
+function GO:IsItemBindOnEquip(itemLink)
+    if not itemLink then return false end
+    
+    -- Create temporary tooltip to scan item binding info
+    if not self.bindScanTooltip then
+        self.bindScanTooltip = CreateFrame("GameTooltip", "PawnStarBindScanTooltip", nil, "GameTooltipTemplate")
+        self.bindScanTooltip:SetOwner(WorldFrame, "ANCHOR_NONE")
+    end
+    
+    self.bindScanTooltip:ClearLines()
+    self.bindScanTooltip:SetHyperlink(itemLink)
+    
+    -- Check tooltip lines for binding information
+    for i = 1, self.bindScanTooltip:NumLines() do
+        local line = _G["PawnStarBindScanTooltipTextLeft" .. i]
+        if line then
+            local text = line:GetText()
+            if text and (text:find("Binds when equipped") or text:find("Bind when Equipped")) then
+                return true
+            end
+        end
+    end
+    
+    return false
+end
+
+-- Enhanced ScanGear function with new option checks
+function GO:ScanGearWithOptions()
+    -- Check if scanning should be paused in combat
+    if PawnStarOmegaDB.pauseInCombat and self:IsInCombat() then
+        self:DebugPrint("Gear scan skipped - player is in combat and pauseInCombat is enabled")
+        return
+    end
+    
+    -- Check if scanning should only happen in safe zones
+    if PawnStarOmegaDB.safeZonesOnly and not self:IsInSafeZone() then
+        self:DebugPrint("Gear scan skipped - player not in safe zone and safeZonesOnly is enabled")
+        return
+    end
+    
+    self:DebugPrint("ScanGear initiated with option checks passed.")
+    self:ScanEquippedGear()
+    self:ScanBagItemsWithOptions()
+    self:CompareGearWithOptions()
+end
+
+-- Enhanced bag scanning with BoE filtering
+function GO:ScanBagItemsWithOptions()
+    self.bagItems = {}
+    self:DebugPrint("Scanning bag items with options...")
+    
+    for bag = 0, 4 do
+        for slot = 1, C_Container.GetContainerNumSlots(bag) do
+            local itemInfo = C_Container.GetContainerItemInfo(bag, slot)
+            if itemInfo and itemInfo.hyperlink then
+                -- Check if we should ignore BoE items
+                if PawnStarOmegaDB.ignoreBoE and self:IsItemBindOnEquip(itemInfo.hyperlink) then
+                    self:DebugPrint("Skipping BoE item: " .. itemInfo.hyperlink)
+                else
+                    if self:IsItemEquippableByClass(itemInfo.hyperlink) then
+                        local equipSlot = self:GetItemEquipSlot(itemInfo.hyperlink)
+                        if equipSlot then
+                            local stats = self:GetItemStats(itemInfo.hyperlink)
+                            local score = self:CalculateItemScore(stats)
+                            local slotsToCheck = type(equipSlot) == "table" and equipSlot or {equipSlot}
+                            
+                            for _, slotNum in ipairs(slotsToCheck) do
+                                -- Apply showOneRing option for ring slots
+                                local shouldSkip = false
+                                if PawnStarOmegaDB.showOneRing and (slotNum == 11 or slotNum == 12) then
+                                    -- Only show for ring slot 11 when showOneRing is enabled
+                                    if slotNum == 12 then
+                                        self:DebugPrint("Skipping ring slot 2 due to showOneRing option")
+                                        shouldSkip = true
+                                    end
+                                end
+                                
+                                if not shouldSkip then
+                                    if not self.bagItems[slotNum] then self.bagItems[slotNum] = {} end
+                                    table.insert(self.bagItems[slotNum], {
+                                        link = itemInfo.hyperlink, 
+                                        stats = stats,
+                                        score = score, 
+                                        bag = bag, 
+                                        slot = slot,
+                                        isBoE = self:IsItemBindOnEquip(itemInfo.hyperlink)
+                                    })
+                                    self:DebugPrint(string.format("  Found suitable item [%s] for slot %d. Score: %.2f, BoE: %s", 
+                                        itemInfo.hyperlink, slotNum, score, tostring(self:IsItemBindOnEquip(itemInfo.hyperlink))))
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+-- Enhanced gear comparison with ring slot handling
+function GO:CompareGearWithOptions()
+    local upgrades = {}
+    self:DebugPrint("--- CompareGear Start (with options) ---")
+
+    for slotNum = 1, 18 do
+        -- Skip slots we don't handle (Shirt, Trinkets)
+        if slotNum ~= 4 and slotNum ~= 13 and slotNum ~= 14 then
+            -- Handle showOneRing option for ring slot 2
+            if PawnStarOmegaDB.showOneRing and slotNum == 12 then
+                self:DebugPrint("Skipping ring slot 2 comparison due to showOneRing option")
+            else
+                self:DebugPrint(string.format("Comparing slot %d (%s)", slotNum, self.slotNames[slotNum] or "Unknown"))
+                local equippedItem = self.equippedGear[slotNum]
+                local equippedScore = equippedItem and equippedItem.score or 0
+                self:DebugPrint(string.format("  Equipped Score: %.2f", equippedScore))
+
+                if self.bagItems[slotNum] then
+                    for _, bagItem in ipairs(self.bagItems[slotNum]) do
+                        if not equippedItem or bagItem.score > equippedScore then
+                            self:DebugPrint(string.format("  FOUND UPGRADE for slot %d: [%s] (Score: %.2f) vs Equipped (Score: %.2f). Empty slot: %s, BoE: %s", 
+                                slotNum, bagItem.link, bagItem.score, equippedScore, tostring(not equippedItem), tostring(bagItem.isBoE or false)))
+                            table.insert(upgrades, {
+                                slot = slotNum,
+                                upgrade = bagItem,
+                                improvement = bagItem.score - equippedScore
+                            })
+                        else
+                             self:DebugPrint(string.format("  Item NOT an upgrade for slot %d: [%s] (Score: %.2f) vs Equipped (Score: %.2f).", 
+                                 slotNum, bagItem.link, bagItem.score, equippedScore))
+                        end
+                    end
+                else
+                     self:DebugPrint("  No suitable bag items found for this slot.")
+                end
+            end
+        end
+    end
+
+    table.sort(upgrades, function(a, b) return a.improvement > b.improvement end)
+    
+    if #upgrades > 0 and not self.frame:IsShown() then
+        self:PlayUpgradeSound()
+    end
+    
+    self:DebugPrint(string.format("--- CompareGear End (with options) --- Found %d total upgrades.", #upgrades))
+    self:DisplayUpgrades(upgrades)
 end
 
 function GO:UpdatePawnStatusDisplay()
@@ -53,7 +220,7 @@ function GO:CreateOptionsPanel()
     end
 
     local f = CreateFrame("Frame", addonName .. "OptionsFrame", UIParent, "BasicFrameTemplateWithInset")
-    f:SetSize(450, 400) -- Made slightly larger
+    f:SetSize(450, 510) -- Made slightly larger
     f:SetPoint("CENTER")
     f:SetFrameStrata("DIALOG")
     f:SetMovable(true)
@@ -70,7 +237,7 @@ function GO:CreateOptionsPanel()
     
     f.title = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     f.title:SetPoint("TOP", f.TitleBg, "TOP", 0, -5)
-    f.title:SetText(addonName .. " Version 1.0")
+    f.title:SetText(addonName .. " Version 1.0.4")
     
     self.optionsFrame = f
 
@@ -144,10 +311,148 @@ function GO:CreateOptionsPanel()
     soundCheck:SetScript("OnClick", function(self)
         PawnStarOmegaDB.soundEnabled = self:GetChecked()
     end)
+
+    -- Pause scans in combat checkbox - ENHANCED
+    local pauseInCombatCheck = CreateFrame("CheckButton", addonName .. "PauseInCombatCheck", f, "UICheckButtonTemplate")
+    pauseInCombatCheck:SetPoint("TOPLEFT", minimapCheck, "BOTTOMLEFT", 0, -10)
+    pauseInCombatCheck.text = pauseInCombatCheck:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+    pauseInCombatCheck.text:SetPoint("LEFT", pauseInCombatCheck, "RIGHT", 5, 0)
+    pauseInCombatCheck.text:SetText("Pause Scans in Combat")
+    pauseInCombatCheck:SetScript("OnClick", function(self)
+        PawnStarOmegaDB.pauseInCombat = self:GetChecked()
+        
+        -- Restart scanning with new options
+        if GO.scanTimer then
+            GO.scanTimer:Cancel()
+        end
+        GO.scanTimer = C_Timer.NewTicker(6, function() 
+            GO:ScanGearWithOptions() 
+        end)
+        
+        -- Provide feedback to user
+        if self:GetChecked() then
+            print("|cff00ff00PawnStarUpgradeOmega:|r Gear scanning will now pause during combat.")
+        else
+            print("|cff00ff00PawnStarUpgradeOmega:|r Gear scanning will continue during combat.")
+        end
+    end)
     
-    -- Information text - moved up to fill the space we just created
+    -- Add tooltip for combat pause option
+    pauseInCombatCheck:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetText("Pause Scans in Combat")
+        GameTooltip:AddLine("When enabled, the addon will not scan for gear upgrades while you are in combat. This can help reduce performance impact during fights.", 1, 1, 1, true)
+        GameTooltip:Show()
+    end)
+    pauseInCombatCheck:SetScript("OnLeave", function(self)
+        GameTooltip:Hide()
+    end)
+
+    -- Scan only in safe zones checkbox - ENHANCED
+    local safeZonesOnlyCheck = CreateFrame("CheckButton", addonName .. "SafeZonesOnlyCheck", f, "UICheckButtonTemplate")
+    safeZonesOnlyCheck:SetPoint("TOPLEFT", soundCheck, "BOTTOMLEFT", 0, -10)
+    safeZonesOnlyCheck.text = safeZonesOnlyCheck:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+    safeZonesOnlyCheck.text:SetPoint("LEFT", safeZonesOnlyCheck, "RIGHT", 5, 0)
+    safeZonesOnlyCheck.text:SetText("Scan Only in Rest Areas")
+    safeZonesOnlyCheck:SetScript("OnClick", function(self)
+        PawnStarOmegaDB.safeZonesOnly = self:GetChecked()
+        
+        -- Restart scanning with new options
+        if GO.scanTimer then
+            GO.scanTimer:Cancel()
+        end
+        GO.scanTimer = C_Timer.NewTicker(6, function() 
+            GO:ScanGearWithOptions() 
+        end)
+        
+        -- Provide feedback to user
+        if self:GetChecked() then
+            print("|cff00ff00PawnStarUpgradeOmega:|r Gear scanning will only occur in rest areas (cities, inns, etc.).")
+        else
+            print("|cff00ff00PawnStarUpgradeOmega:|r Gear scanning will occur anywhere.")
+        end
+    end)
+    
+    -- Add tooltip for safe zones option
+    safeZonesOnlyCheck:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetText("Scan Only in Rest Areas")
+        GameTooltip:AddLine("When enabled, the addon will only scan for gear upgrades when you are in a rest area (cities, inns, etc.). This prevents upgrade notifications while questing or in dangerous areas.", 1, 1, 1, true)
+        GameTooltip:Show()
+    end)
+    safeZonesOnlyCheck:SetScript("OnLeave", function(self)
+        GameTooltip:Hide()
+    end)
+    
+    -- Ignore Bind on Equip checkbox - ENHANCED
+    local ignoreBoECheck = CreateFrame("CheckButton", addonName .. "IgnoreBoECheck", f, "UICheckButtonTemplate")
+    ignoreBoECheck:SetPoint("TOPLEFT", pauseInCombatCheck, "BOTTOMLEFT", 0, -10)
+    ignoreBoECheck.text = ignoreBoECheck:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+    ignoreBoECheck.text:SetPoint("LEFT", ignoreBoECheck, "RIGHT", 5, 0)
+    ignoreBoECheck.text:SetText("Ignore Bind on Equip")
+    ignoreBoECheck:SetScript("OnClick", function(self)
+        PawnStarOmegaDB.ignoreBoE = self:GetChecked()
+        
+        -- Immediately rescan gear to apply changes
+        C_Timer.After(0.5, function()
+            GO:ScanGearWithOptions()
+        end)
+        
+        -- Provide feedback to user
+        if self:GetChecked() then
+            print("|cff00ff00PawnStarUpgradeOmega:|r Bind on Equip items will be ignored in upgrade recommendations.")
+        else
+            print("|cff00ff00PawnStarUpgradeOmega:|r Bind on Equip items will be included in upgrade recommendations.")
+        end
+    end)
+    
+    -- Add tooltip for BoE option
+    ignoreBoECheck:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetText("Ignore Bind on Equip")
+        GameTooltip:AddLine("When enabled, items that bind when equipped will not be suggested as upgrades. Useful if you want to preserve BoE items for selling or trading.", 1, 1, 1, true)
+        GameTooltip:Show()
+    end)
+    ignoreBoECheck:SetScript("OnLeave", function(self)
+        GameTooltip:Hide()
+    end)
+
+    -- Show 1 Ring Slot Only checkbox - ENHANCED
+    local showOneRingCheck = CreateFrame("CheckButton", addonName .. "ShowOneRingCheck", f, "UICheckButtonTemplate")
+    showOneRingCheck:SetPoint("TOPLEFT", safeZonesOnlyCheck, "BOTTOMLEFT", 0, -10)
+    showOneRingCheck.text = showOneRingCheck:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+    showOneRingCheck.text:SetPoint("LEFT", showOneRingCheck, "RIGHT", 5, 0)
+    showOneRingCheck.text:SetText("Show 1 Ring Slot Only")
+    showOneRingCheck:SetScript("OnClick", function(self)
+        PawnStarOmegaDB.showOneRing = self:GetChecked()
+        
+        -- Immediately rescan gear to apply changes
+        C_Timer.After(0.5, function()
+            GO:ScanGearWithOptions()
+        end)
+        
+        -- Provide feedback to user
+        if self:GetChecked() then
+            print("|cff00ff00PawnStarUpgradeOmega:|r Only ring slot 1 will show upgrade recommendations.")
+        else
+            print("|cff00ff00PawnStarUpgradeOmega:|r Both ring slots will show upgrade recommendations.")
+        end
+    end)
+    
+    -- Add tooltip for ring slot option
+    showOneRingCheck:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetText("Show 1 Ring Slot Only")
+        GameTooltip:AddLine("When enabled, only ring slot 1 will be considered for upgrade recommendations. This reduces duplicate ring suggestions since both ring slots can use the same items.", 1, 1, 1, true)
+        GameTooltip:Show()
+    end)
+    showOneRingCheck:SetScript("OnLeave", function(self)
+        GameTooltip:Hide()
+    end)
+    
+    -- Information text - moved down
     local infoText = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    infoText:SetPoint("TOPLEFT", minimapCheck, "BOTTOMLEFT", 5, -15)
+    infoText:SetPoint("TOPLEFT", ignoreBoECheck, "BOTTOMLEFT", 0, -10)
     infoText:SetWidth(390)
     infoText:SetJustifyH("LEFT")
     infoText:SetText("This addon enhances your WoW experience by automatically detecting gear upgrades. " ..
@@ -180,7 +485,7 @@ end
 
 -- Constants for the Support & Community popup window (based on GoldReaper's Welcome window)
 local SUPPORT_WINDOW_WIDTH = 420
-local SUPPORT_WINDOW_HEIGHT = 580
+local SUPPORT_WINDOW_HEIGHT = 690
 local DISCORD_LOGO_PATH = "Interface\\AddOns\\PawnStarUpgradeOmega\\Media\\DiscordLogo.tga"
 local PATREON_LOGO_PATH = "Interface\\AddOns\\PawnStarUpgradeOmega\\Media\\PatreonLogo.tga"
 
@@ -319,4 +624,3 @@ function GO:ToggleOptionsPanel()
         end
     end
 end
-

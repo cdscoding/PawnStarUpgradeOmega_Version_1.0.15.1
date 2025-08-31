@@ -114,7 +114,11 @@ function GO:OnLoad()
         minimap = { hide = false },
         soundEnabled = true,
         debugMode = false,
-        hasShownPawnRecommendation = false
+        hasShownPawnRecommendation = false,
+        pauseInCombat = false,
+        safeZonesOnly = false,
+        ignoreBoE = false,
+        showOneRing = false
     }
 
     -- Initialize or update the database
@@ -127,6 +131,10 @@ function GO:OnLoad()
     PawnStarOmegaDB.soundEnabled = (PawnStarOmegaDB.soundEnabled == nil) and defaults.soundEnabled or PawnStarOmegaDB.soundEnabled
     PawnStarOmegaDB.debugMode = PawnStarOmegaDB.debugMode or defaults.debugMode
     PawnStarOmegaDB.hasShownPawnRecommendation = PawnStarOmegaDB.hasShownPawnRecommendation or defaults.hasShownPawnRecommendation
+    PawnStarOmegaDB.pauseInCombat = (PawnStarOmegaDB.pauseInCombat == nil) and defaults.pauseInCombat or PawnStarOmegaDB.pauseInCombat
+    PawnStarOmegaDB.safeZonesOnly = (PawnStarOmegaDB.safeZonesOnly == nil) and defaults.safeZonesOnly or PawnStarOmegaDB.safeZonesOnly
+    PawnStarOmegaDB.ignoreBoE = (PawnStarOmegaDB.ignoreBoE == nil) and defaults.ignoreBoE or PawnStarOmegaDB.ignoreBoE
+    PawnStarOmegaDB.showOneRing = (PawnStarOmegaDB.showOneRing == nil) and defaults.showOneRing or PawnStarOmegaDB.showOneRing
 
     -- Clean up old variables
     PawnStarOmegaDB.firstTimeUser = nil
@@ -237,10 +245,10 @@ function GO:CreateMinimapIcon()
     LibDBIcon:Register(addonName, dataObject, PawnStarOmegaDB.minimap)
 end
 
-
 function GO:StartScanning()
     if self.scanTimer then self.scanTimer:Cancel() end
-    self.scanTimer = C_Timer.NewTicker(6, function() self:ScanGear() end)
+    -- Use the enhanced scanning function that checks options
+    self.scanTimer = C_Timer.NewTicker(6, function() self:ScanGearWithOptions() end)
 end
 
 function GO:StartArrowAnimation()
@@ -261,11 +269,9 @@ function GO:UpdateArrowAnimation()
     -- Note: Options frame no longer has arrows
 end
 
+-- Legacy function maintained for compatibility - now redirects to enhanced version
 function GO:ScanGear()
-    self:DebugPrint("ScanGear initiated.")
-    self:ScanEquippedGear()
-    self:ScanBagItems()
-    self:CompareGear()
+    self:ScanGearWithOptions()
 end
 
 function GO:ScanEquippedGear()
@@ -305,32 +311,14 @@ function GO:IsItemEquippableByClass(itemLink)
     end
 end
 
+-- Legacy function maintained for compatibility - now redirects to enhanced version
 function GO:ScanBagItems()
-    self.bagItems = {}
-    self:DebugPrint("Scanning bag items...")
-    for bag = 0, 4 do
-        for slot = 1, C_Container.GetContainerNumSlots(bag) do
-            local itemInfo = C_Container.GetContainerItemInfo(bag, slot)
-            if itemInfo and itemInfo.hyperlink then
-                if self:IsItemEquippableByClass(itemInfo.hyperlink) then
-                    local equipSlot = self:GetItemEquipSlot(itemInfo.hyperlink)
-                    if equipSlot then
-                        local stats = self:GetItemStats(itemInfo.hyperlink)
-                        local score = self:CalculateItemScore(stats)
-                        local slotsToCheck = type(equipSlot) == "table" and equipSlot or {equipSlot}
-                        for _, slotNum in ipairs(slotsToCheck) do
-                            if not self.bagItems[slotNum] then self.bagItems[slotNum] = {} end
-                            table.insert(self.bagItems[slotNum], {
-                                link = itemInfo.hyperlink, stats = stats,
-                                score = score, bag = bag, slot = slot
-                            })
-                            self:DebugPrint(string.format("  Found suitable item [%s] for slot %d. Score: %.2f", itemInfo.hyperlink, slotNum, score))
-                        end
-                    end
-                end
-            end
-        end
-    end
+    self:ScanBagItemsWithOptions()
+end
+
+-- Legacy function maintained for compatibility - now redirects to enhanced version
+function GO:CompareGear()
+    self:CompareGearWithOptions()
 end
 
 function GO:GetItemStats(itemLink)
@@ -393,47 +381,6 @@ function GO:GetItemEquipSlot(itemLink)
     return slotMap[equipSlot]
 end
 
-function GO:CompareGear()
-    local upgrades = {}
-    self:DebugPrint("--- CompareGear Start ---")
-
-    for slotNum = 1, 18 do
-        -- Skip slots we don't handle (Shirt, Trinkets)
-        if slotNum ~= 4 and slotNum ~= 13 and slotNum ~= 14 then
-            self:DebugPrint(string.format("Comparing slot %d (%s)", slotNum, self.slotNames[slotNum] or "Unknown"))
-            local equippedItem = self.equippedGear[slotNum]
-            local equippedScore = equippedItem and equippedItem.score or 0
-            self:DebugPrint(string.format("  Equipped Score: %.2f", equippedScore))
-
-            if self.bagItems[slotNum] then
-                for _, bagItem in ipairs(self.bagItems[slotNum]) do
-                    if not equippedItem or bagItem.score > equippedScore then
-                        self:DebugPrint(string.format("  FOUND UPGRADE for slot %d: [%s] (Score: %.2f) vs Equipped (Score: %.2f). Empty slot: %s", slotNum, bagItem.link, bagItem.score, equippedScore, tostring(not equippedItem)))
-                        table.insert(upgrades, {
-                            slot = slotNum,
-                            upgrade = bagItem,
-                            improvement = bagItem.score - equippedScore
-                        })
-                    else
-                         self:DebugPrint(string.format("  Item NOT an upgrade for slot %d: [%s] (Score: %.2f) vs Equipped (Score: %.2f).", slotNum, bagItem.link, bagItem.score, equippedScore))
-                    end
-                end
-            else
-                 self:DebugPrint("  No suitable bag items found for this slot.")
-            end
-        end
-    end
-
-    table.sort(upgrades, function(a, b) return a.improvement > b.improvement end)
-    
-    if #upgrades > 0 and not self.frame:IsShown() then
-        self:PlayUpgradeSound()
-    end
-    
-    self:DebugPrint(string.format("--- CompareGear End --- Found %d total upgrades.", #upgrades))
-    self:DisplayUpgrades(upgrades)
-end
-
 function GO:DisplayUpgrades(upgrades)
     self:DebugPrint(string.format("DisplayUpgrades called with %d items.", #upgrades))
     
@@ -487,14 +434,21 @@ function GO:DisplayUpgrades(upgrades)
         
         local slotName = self.slotNames[upgrade.slot] or ("Slot " .. upgrade.slot)
         local improvementText = string.format("+%.1f", upgrade.improvement)
-        button:SetText(string.format("%s (%s): %s", slotName, improvementText, upgrade.upgrade.link))
+        
+        -- Add BoE indicator if applicable
+        local boEIndicator = ""
+        if upgrade.upgrade.isBoE then
+            boEIndicator = " |cffff6600(BoE)|r"
+        end
+        
+        button:SetText(string.format("%s (%s): %s%s", slotName, improvementText, upgrade.upgrade.link, boEIndicator))
         button:GetFontString():SetJustifyH("LEFT")
         button:GetFontString():SetPoint("LEFT", 10, 0)
         
         button:SetScript("OnClick", function(self)
             C_Container.UseContainerItem(self.bag, self.slot)
             GO.frame:Hide()
-            C_Timer.After(1.5, function() GO:ScanGear() end)
+            C_Timer.After(1.5, function() GO:ScanGearWithOptions() end)
         end)
         
         yOffset = yOffset - 45
@@ -520,6 +474,13 @@ SlashCmdList["PAWNSTAR"] = function(msg)
         print("Player class: " .. (GO.playerClass or "nil"))
         print("Player spec: " .. (GO.playerSpec or "nil"))
         print("Pawn available: " .. tostring(GO:IsPawnAvailable()))
+        print("Combat pause: " .. tostring(PawnStarOmegaDB.pauseInCombat))
+        print("Safe zones only: " .. tostring(PawnStarOmegaDB.safeZonesOnly))
+        print("Ignore BoE: " .. tostring(PawnStarOmegaDB.ignoreBoE))
+        print("Show one ring: " .. tostring(PawnStarOmegaDB.showOneRing))
+        print("Currently in combat: " .. tostring(GO:IsInCombat()))
+        print("Currently in safe zone: " .. tostring(GO:IsInSafeZone()))
+        
         local equippedCount = 0
         for _ in pairs(GO.equippedGear) do equippedCount = equippedCount + 1 end
         print("Equipped items (" .. equippedCount .. "):")
@@ -530,7 +491,7 @@ SlashCmdList["PAWNSTAR"] = function(msg)
         for slot, items in pairs(GO.bagItems) do
             print("  Slot " .. slot .. " can hold " .. #items .. " items:")
             for i, item in ipairs(items) do
-                print(string.format("    Item %d: [%s] bag=%d slot=%d score=%.1f", i, item.link, item.bag, item.slot, item.score))
+                print(string.format("    Item %d: [%s] bag=%d slot=%d score=%.1f BoE=%s", i, item.link, item.bag, item.slot, item.score, tostring(item.isBoE or false)))
             end
         end
     elseif msg == "pawn" then
@@ -571,9 +532,8 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
                 end
             end)
         end
-        C_Timer.After(5, function() GO:ScanGear() end)
+        C_Timer.After(5, function() GO:ScanGearWithOptions() end)
     elseif event == "PLAYER_EQUIPMENT_CHANGED" or event == "BAG_UPDATE" then
-        C_Timer.After(1.5, function() GO:ScanGear() end)
+        C_Timer.After(1.5, function() GO:ScanGearWithOptions() end)
     end
 end)
-

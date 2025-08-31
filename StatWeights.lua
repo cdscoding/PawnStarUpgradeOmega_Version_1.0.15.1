@@ -557,7 +557,7 @@ function GO:CreateStatWeightsPanel()
     if self.statWeightsFrame then return end
 
     local f = CreateFrame("Frame", addonName .. "StatWeightsFrame", UIParent, "BasicFrameTemplateWithInset")
-    f:SetSize(450, 400) -- Slightly larger to accommodate hints
+    f:SetSize(450, 510) -- Slightly larger to accommodate hints
     f:SetPoint("LEFT", self.optionsFrame, "RIGHT", 10, 0)
     f:SetFrameStrata("DIALOG")
     
@@ -596,3 +596,4 @@ function GO:CreateStatWeightsPanel()
     self:CreateScaleDropdown()
     f:Hide()
 end
+
