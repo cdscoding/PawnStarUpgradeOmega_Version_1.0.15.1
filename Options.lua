@@ -237,7 +237,7 @@ function GO:CreateOptionsPanel()
     
     f.title = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     f.title:SetPoint("TOP", f.TitleBg, "TOP", 0, -5)
-    f.title:SetText(addonName .. " Version 1.0.4")
+    f.title:SetText(addonName .. " Version 1.0.9")
     
     self.optionsFrame = f
 

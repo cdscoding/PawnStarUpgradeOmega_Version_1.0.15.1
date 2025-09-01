@@ -1,4 +1,4 @@
--- PawnStarUpgradeOmega.lua - Main addon file with smart Pawn integration
+-- PawnStarUpgradeOmega.lua - Main addon file with smart Pawn integration and enhanced weapon handling
 
 local addonName = "PawnStarUpgradeOmega"
 PawnStarUpgradeOmega = {}
@@ -274,39 +274,82 @@ function GO:ScanGear()
     self:ScanGearWithOptions()
 end
 
+-- ENHANCED: Updated to include item level scaling
 function GO:ScanEquippedGear()
     self.equippedGear = {}
     for slot = 1, 18 do
         local itemLink = GetInventoryItemLink("player", slot)
         if itemLink then
             local stats = self:GetItemStats(itemLink)
-            self.equippedGear[slot] = { link = itemLink, stats = stats, score = self:CalculateItemScore(stats) }
-            self:DebugPrint(string.format("Equipped item in slot %d [%s]: Score %.2f", slot, itemLink, self.equippedGear[slot].score))
+            self.equippedGear[slot] = { 
+                link = itemLink, 
+                stats = stats, 
+                score = self:CalculateItemScore(stats, itemLink) -- Now includes ilvl scaling
+            }
+            self:DebugPrint(string.format("Equipped slot %d [%s]: Score %.2f", slot, itemLink, self.equippedGear[slot].score))
         end
     end
+end
+
+-- NEW: Enhanced function to check if item can be equipped by character level
+function GO:CanPlayerUseItem(itemLink)
+    if not itemLink then return false end
+    
+    local itemLevel, itemMinLevel = select(4, GetItemInfo(itemLink)), select(5, GetItemInfo(itemLink))
+    local playerLevel = UnitLevel("player")
+    
+    if itemMinLevel and playerLevel < itemMinLevel then
+        self:DebugPrint(string.format("Item [%s] requires level %d, player is level %d - CANNOT USE", 
+            itemLink, itemMinLevel, playerLevel))
+        return false
+    end
+    
+    self:DebugPrint(string.format("Item [%s] level requirement check passed (req: %s, player: %d)", 
+        itemLink, tostring(itemMinLevel), playerLevel))
+    return true
 end
 
 function GO:IsItemEquippableByClass(itemLink)
     local itemName = GetItemInfo(itemLink)
     local _, _, _, equipSlot, _, classID, subClassID = C_Item.GetItemInfoInstant(itemLink)
     
+    -- If the item doesn't have an equip slot (like a Keystone), it's not equippable gear.
+    -- This check prevents the function from processing non-gear items and causing errors.
+    if not equipSlot or equipSlot == "INVTYPE_NON_EQUIP" then
+        self:DebugPrint(string.format("Checking [%s]: SKIPPED. Not an equippable item.", itemName or itemLink))
+        return false
+    end
+    
+    -- Check level requirement first
+    if not self:CanPlayerUseItem(itemLink) then
+        return false
+    end
+    
     if not self.playerClass or not self.classEquipmentRules[self.playerClass] then
-        self:DebugPrint(string.format("Checking [%s]: FAILED. Player class '%s' not found in rules.", itemName, self.playerClass))
+        -- Fallback to itemLink for debug message if itemName is nil
+        self:DebugPrint(string.format("Checking [%s]: FAILED. Player class '%s' not found in rules.", itemName or itemLink, self.playerClass))
         return false
     end
 
     if equipSlot == "INVTYPE_NECK" or equipSlot == "INVTYPE_CLOAK" or equipSlot == "INVTYPE_FINGER" or equipSlot == "INVTYPE_TRINKET" or equipSlot == "INVTYPE_SHIRT" or equipSlot == "INVTYPE_TABARD" then
-        self:DebugPrint(string.format("Checking [%s]: PASSED. Universal slot type '%s'.", itemName, equipSlot))
+        self:DebugPrint(string.format("Checking [%s]: PASSED. Universal slot type '%s'.", itemName or itemLink, equipSlot))
         return true
     end
 
     local rules = self.classEquipmentRules[self.playerClass]
+    
+    -- Also check if classID or subClassID are nil, which can happen for some items.
+    if not classID or not subClassID then
+        self:DebugPrint(string.format("Checking [%s]: FAILED. Could not determine ClassID or SubClassID.", itemName or itemLink))
+        return false
+    end
+
     local result = rules[classID] and rules[classID][subClassID]
     if result then
-        self:DebugPrint(string.format("Checking [%s]: PASSED. ClassID: %d, SubClassID: %d are valid for %s.", itemName, classID, subClassID, self.playerClass))
+        self:DebugPrint(string.format("Checking [%s]: PASSED. ClassID: %d, SubClassID: %d are valid for %s.", itemName or itemLink, classID, subClassID, self.playerClass))
         return true
     else
-        self:DebugPrint(string.format("Checking [%s]: FAILED. ClassID: %d, SubClassID: %d are NOT valid for %s.", itemName, classID, subClassID, self.playerClass))
+        self:DebugPrint(string.format("Checking [%s]: FAILED. ClassID: %d, SubClassID: %d are NOT valid for %s.", itemName or itemLink, classID, subClassID, self.playerClass))
         return false
     end
 end
@@ -316,9 +359,92 @@ function GO:ScanBagItems()
     self:ScanBagItemsWithOptions()
 end
 
+-- ENHANCED: Updated to include item level scaling
+function GO:ScanBagItemsWithOptions()
+    self.bagItems = {}
+    self:DebugPrint("Scanning bag items...")
+    
+    for bag = 0, 4 do
+        for slot = 1, C_Container.GetContainerNumSlots(bag) do
+            local itemInfo = C_Container.GetContainerItemInfo(bag, slot)
+            if itemInfo and itemInfo.hyperlink then
+                if PawnStarOmegaDB.ignoreBoE and self:IsItemBindOnEquip(itemInfo.hyperlink) then
+                    self:DebugPrint("Skipping BoE item: " .. itemInfo.hyperlink)
+                else
+                    if self:IsItemEquippableByClass(itemInfo.hyperlink) then
+                        local equipSlot = self:GetItemEquipSlot(itemInfo.hyperlink)
+                        if equipSlot then
+                            local stats = self:GetItemStats(itemInfo.hyperlink)
+                            local score = self:CalculateItemScore(stats, itemInfo.hyperlink) -- Now includes ilvl scaling
+                            local slotsToCheck = type(equipSlot) == "table" and equipSlot or {equipSlot}
+                            
+                            for _, slotNum in ipairs(slotsToCheck) do
+                                local shouldSkip = PawnStarOmegaDB.showOneRing and slotNum == 12
+                                
+                                if not shouldSkip then
+                                    if not self.bagItems[slotNum] then self.bagItems[slotNum] = {} end
+                                    table.insert(self.bagItems[slotNum], {
+                                        link = itemInfo.hyperlink, 
+                                        stats = stats,
+                                        score = score, 
+                                        bag = bag, 
+                                        slot = slot,
+                                        isBoE = self:IsItemBindOnEquip(itemInfo.hyperlink)
+                                    })
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
 -- Legacy function maintained for compatibility - now redirects to enhanced version
 function GO:CompareGear()
     self:CompareGearWithOptions()
+end
+
+-- ENHANCED: Updated with smart weapon comparison logic
+function GO:CompareGearWithOptions()
+    local upgrades = {}
+    
+    -- Handle non-weapon slots normally
+    for slotNum = 1, 18 do
+        if slotNum ~= 4 and slotNum ~= 13 and slotNum ~= 14 and slotNum ~= 16 and slotNum ~= 17 then
+            if not (PawnStarOmegaDB.showOneRing and slotNum == 12) then
+                local equippedItem = self.equippedGear[slotNum]
+                local equippedScore = equippedItem and equippedItem.score or 0
+                
+                if self.bagItems[slotNum] then
+                    for _, bagItem in ipairs(self.bagItems[slotNum]) do
+                        if not equippedItem or bagItem.score > equippedScore then
+                            table.insert(upgrades, {
+                                slot = slotNum,
+                                upgrade = bagItem,
+                                improvement = bagItem.score - equippedScore
+                            })
+                        end
+                    end
+                end
+            end
+        end
+    end
+    
+    -- Handle weapon slots with new smart logic
+    local weaponUpgrades = self:CompareWeaponSlots(self.bagItems)
+    for _, upgrade in ipairs(weaponUpgrades) do
+        table.insert(upgrades, upgrade)
+    end
+
+    table.sort(upgrades, function(a, b) return a.improvement > b.improvement end)
+    
+    if #upgrades > 0 and not self.frame:IsShown() then
+        self:PlayUpgradeSound()
+    end
+    
+    self:DisplayUpgrades(upgrades)
 end
 
 function GO:GetItemStats(itemLink)
@@ -356,14 +482,30 @@ function GO:GetItemStats(itemLink)
     return stats
 end
 
-function GO:CalculateItemScore(stats)
+-- ENHANCED: Updated with item level scaling to fix high ilvl vs low ilvl comparison
+function GO:CalculateItemScore(stats, itemLink)
     local weights, _ = self:GetCurrentStatWeights()
     local score = 0
+    
+    -- Calculate base stat score
     for stat, value in pairs(stats) do
         if weights[stat] then
             score = score + (value * weights[stat])
         end
     end
+    
+    -- Apply item level scaling factor to fix high ilvl vs low ilvl comparison
+    if itemLink then
+        local _, _, _, itemLevel = GetItemInfo(itemLink)
+        if itemLevel and itemLevel > 0 then
+            local ilvlFactor = 1 + (itemLevel - 600) * 0.001
+            score = score * math.max(ilvlFactor, 1.0)
+            
+            self:DebugPrint(string.format("Item [%s] - Item Level: %d, Final score: %.2f", 
+                itemLink, itemLevel, score))
+        end
+    end
+    
     return score
 end
 
@@ -379,6 +521,169 @@ function GO:GetItemEquipSlot(itemLink)
     }
     self:DebugPrint(string.format("GetItemEquipSlot for [%s]: equipSlot token '%s'. Mapped to game slot %s.", itemLink, tostring(equipSlot), tostring(slotMap[equipSlot])))
     return slotMap[equipSlot]
+end
+
+-- NEW: Weapon type detection functions
+function GO:IsTwoHandedWeapon(itemLink)
+    if not itemLink then return false end
+    local _, _, _, equipSlot = GetItemInfo(itemLink)
+    return equipSlot == "INVTYPE_2HWEAPON"
+end
+
+function GO:IsOneHandedWeapon(itemLink)
+    if not itemLink then return false end
+    local _, _, _, equipSlot = GetItemInfo(itemLink)
+    return equipSlot == "INVTYPE_WEAPON" or equipSlot == "INVTYPE_WEAPONMAINHAND" or equipSlot == "INVTYPE_WEAPONOFFHAND"
+end
+
+-- NEW: Enhanced shield detection
+function GO:IsShield(itemLink)
+    if not itemLink then return false end
+    local _, _, _, equipSlot = GetItemInfo(itemLink)
+    return equipSlot == "INVTYPE_SHIELD"
+end
+
+-- NEW: Enhanced off-hand item detection (includes shields, off-hand weapons, and holdable items)
+function GO:IsOffHandItem(itemLink)
+    if not itemLink then return false end
+    local _, _, _, equipSlot = GetItemInfo(itemLink)
+    return equipSlot == "INVTYPE_SHIELD" or equipSlot == "INVTYPE_WEAPONOFFHAND" or equipSlot == "INVTYPE_HOLDABLE"
+end
+
+function GO:CanUse2HandedWeapons()
+    local specID = GetSpecialization()
+    if not specID then return true end
+    
+    local specName = select(2, GetSpecializationInfo(specID))
+    local _, classFile = UnitClass("player")
+    
+    local twoHandedSpecs = {
+        WARRIOR = { "Arms", "Fury" },
+        PALADIN = { "Retribution" },
+        DEATHKNIGHT = { "Frost", "Unholy" },
+        HUNTER = { "Survival", "Beast Mastery", "Marksmanship" },
+        SHAMAN = { "Enhancement" },
+    }
+    
+    if twoHandedSpecs[classFile] then
+        for _, allowedSpec in ipairs(twoHandedSpecs[classFile]) do
+            if specName == allowedSpec then return true end
+        end
+    end
+    return false
+end
+
+function GO:PrefersDualWield()
+    local specID = GetSpecialization()
+    if not specID then return false end
+    
+    local specName = select(2, GetSpecializationInfo(specID))
+    local _, classFile = UnitClass("player")
+    
+    local dualWieldSpecs = {
+        ROGUE = { "Assassination", "Outlaw", "Subtlety" },
+        SHAMAN = { "Enhancement" },
+        WARRIOR = { "Fury" },
+        DEATHKNIGHT = { "Frost" },
+        MONK = { "Windwalker" },
+        DEMONHUNTER = { "Havoc", "Vengeance" },
+    }
+    
+    if dualWieldSpecs[classFile] then
+        for _, preferredSpec in ipairs(dualWieldSpecs[classFile]) do
+            if specName == preferredSpec then return true end
+        end
+    end
+    return false
+end
+
+-- NEW: Enhanced weapon slot comparison with proper shield and off-hand logic
+function GO:CompareWeaponSlots(bagItems)
+    local mainHand = self.equippedGear[16]
+    local offHand = self.equippedGear[17]
+    local upgrades = {}
+    
+    local mainHandScore = mainHand and mainHand.score or 0
+    local offHandScore = offHand and offHand.score or 0
+    local currentTotalScore = mainHandScore + offHandScore
+    
+    self:DebugPrint(string.format("Weapon comparison - MH: %.2f, OH: %.2f, Total: %.2f", 
+        mainHandScore, offHandScore, currentTotalScore))
+    
+    -- Check 2-handed weapons vs combined 1-hander power
+    if bagItems[16] and self:CanUse2HandedWeapons() then
+        for _, bagItem in ipairs(bagItems[16]) do
+            if self:IsTwoHandedWeapon(bagItem.link) and bagItem.score > currentTotalScore then
+                table.insert(upgrades, {
+                    slot = 16,
+                    upgrade = bagItem,
+                    improvement = bagItem.score - currentTotalScore,
+                    replaces = "both weapons"
+                })
+                self:DebugPrint(string.format("Found 2H upgrade: %s (%.2f vs %.2f total)", 
+                    bagItem.link, bagItem.score, currentTotalScore))
+            end
+        end
+    end
+    
+    -- Check 1-handed main hand upgrades
+    if bagItems[16] then
+        for _, bagItem in ipairs(bagItems[16]) do
+            if self:IsOneHandedWeapon(bagItem.link) and bagItem.score > mainHandScore then
+                table.insert(upgrades, {
+                    slot = 16,
+                    upgrade = bagItem,
+                    improvement = bagItem.score - mainHandScore
+                })
+                self:DebugPrint(string.format("Found MH upgrade: %s (%.2f vs %.2f)", 
+                    bagItem.link, bagItem.score, mainHandScore))
+            end
+        end
+    end
+    
+    -- Enhanced off-hand checking (handles shields, off-hand weapons, and holdable items)
+    if bagItems[17] then
+        for _, bagItem in ipairs(bagItems[17]) do
+            local isValidOffHand = false
+            local equipType = ""
+            
+            if self:IsShield(bagItem.link) then
+                isValidOffHand = true
+                equipType = "Shield"
+                self:DebugPrint(string.format("Checking shield: %s", bagItem.link))
+            elseif self:IsOneHandedWeapon(bagItem.link) then
+                -- Only suggest off-hand weapons for dual-wield capable specs
+                if self:PrefersDualWield() then
+                    isValidOffHand = true
+                    equipType = "Off-hand Weapon"
+                    self:DebugPrint(string.format("Checking off-hand weapon: %s (dual-wield spec)", bagItem.link))
+                else
+                    self:DebugPrint(string.format("Skipping off-hand weapon: %s (not dual-wield spec)", bagItem.link))
+                end
+            else
+                -- Handle other off-hand items (holdable items like orbs, tomes, etc.)
+                local _, _, _, equipSlot = GetItemInfo(bagItem.link)
+                if equipSlot == "INVTYPE_HOLDABLE" then
+                    isValidOffHand = true
+                    equipType = "Off-hand Item"
+                    self:DebugPrint(string.format("Checking holdable off-hand: %s", bagItem.link))
+                end
+            end
+            
+            if isValidOffHand and bagItem.score > offHandScore then
+                table.insert(upgrades, {
+                    slot = 17,
+                    upgrade = bagItem,
+                    improvement = bagItem.score - offHandScore,
+                    equipType = equipType
+                })
+                self:DebugPrint(string.format("Found OH upgrade: %s (%s) (%.2f vs %.2f)", 
+                    bagItem.link, equipType, bagItem.score, offHandScore))
+            end
+        end
+    end
+    
+    return upgrades
 end
 
 function GO:DisplayUpgrades(upgrades)
@@ -441,7 +746,22 @@ function GO:DisplayUpgrades(upgrades)
             boEIndicator = " |cffff6600(BoE)|r"
         end
         
-        button:SetText(string.format("%s (%s): %s%s", slotName, improvementText, upgrade.upgrade.link, boEIndicator))
+        -- Enhanced weapon type indication
+        if upgrade.replaces == "both weapons" then
+            slotName = slotName .. " (2H)"
+        elseif upgrade.equipType then
+            slotName = slotName .. " (" .. upgrade.equipType .. ")"
+        end
+        
+        -- Add level requirement warning if item is too high level
+        local levelWarning = ""
+        local _, _, _, _, itemMinLevel = GetItemInfo(upgrade.upgrade.link)
+        local playerLevel = UnitLevel("player")
+        if itemMinLevel and playerLevel < itemMinLevel then
+            levelWarning = string.format(" |cffff0000(Req: %d)|r", itemMinLevel)
+        end
+        
+        button:SetText(string.format("%s (%s): %s%s%s", slotName, improvementText, upgrade.upgrade.link, boEIndicator, levelWarning))
         button:GetFontString():SetJustifyH("LEFT")
         button:GetFontString():SetPoint("LEFT", 10, 0)
         
@@ -455,6 +775,63 @@ function GO:DisplayUpgrades(upgrades)
     end
     
     self.content:SetHeight(math.abs(yOffset))
+end
+
+-- Helper function to check if player is in combat
+function GO:IsInCombat()
+    return InCombatLockdown()
+end
+
+-- Helper function to check if player is in a safe zone (rest area)
+function GO:IsInSafeZone()
+    return IsResting()
+end
+
+-- Helper function to check if an item is Bind on Equip
+function GO:IsItemBindOnEquip(itemLink)
+    if not itemLink then return false end
+    
+    -- Create temporary tooltip to scan item binding info
+    if not self.bindScanTooltip then
+        self.bindScanTooltip = CreateFrame("GameTooltip", "PawnStarBindScanTooltip", nil, "GameTooltipTemplate")
+        self.bindScanTooltip:SetOwner(WorldFrame, "ANCHOR_NONE")
+    end
+    
+    self.bindScanTooltip:ClearLines()
+    self.bindScanTooltip:SetHyperlink(itemLink)
+    
+    -- Check tooltip lines for binding information
+    for i = 1, self.bindScanTooltip:NumLines() do
+        local line = _G["PawnStarBindScanTooltipTextLeft" .. i]
+        if line then
+            local text = line:GetText()
+            if text and (text:find("Binds when equipped") or text:find("Bind when Equipped")) then
+                return true
+            end
+        end
+    end
+    
+    return false
+end
+
+-- Enhanced ScanGear function with new option checks
+function GO:ScanGearWithOptions()
+    -- Check if scanning should be paused in combat
+    if PawnStarOmegaDB.pauseInCombat and self:IsInCombat() then
+        self:DebugPrint("Gear scan skipped - player is in combat and pauseInCombat is enabled")
+        return
+    end
+    
+    -- Check if scanning should only happen in safe zones
+    if PawnStarOmegaDB.safeZonesOnly and not self:IsInSafeZone() then
+        self:DebugPrint("Gear scan skipped - player not in safe zone and safeZonesOnly is enabled")
+        return
+    end
+    
+    self:DebugPrint("ScanGear initiated with option checks passed.")
+    self:ScanEquippedGear()
+    self:ScanBagItemsWithOptions()
+    self:CompareGearWithOptions()
 end
 
 -- Slash command handler with enhanced messaging
@@ -473,6 +850,7 @@ SlashCmdList["PAWNSTAR"] = function(msg)
         print("PawnStar: Debug info dump:")
         print("Player class: " .. (GO.playerClass or "nil"))
         print("Player spec: " .. (GO.playerSpec or "nil"))
+        print("Player level: " .. UnitLevel("player"))
         print("Pawn available: " .. tostring(GO:IsPawnAvailable()))
         print("Combat pause: " .. tostring(PawnStarOmegaDB.pauseInCombat))
         print("Safe zones only: " .. tostring(PawnStarOmegaDB.safeZonesOnly))
@@ -480,6 +858,8 @@ SlashCmdList["PAWNSTAR"] = function(msg)
         print("Show one ring: " .. tostring(PawnStarOmegaDB.showOneRing))
         print("Currently in combat: " .. tostring(GO:IsInCombat()))
         print("Currently in safe zone: " .. tostring(GO:IsInSafeZone()))
+        print("Can use 2H weapons: " .. tostring(GO:CanUse2HandedWeapons()))
+        print("Prefers dual wield: " .. tostring(GO:PrefersDualWield()))
         
         local equippedCount = 0
         for _ in pairs(GO.equippedGear) do equippedCount = equippedCount + 1 end
@@ -491,7 +871,9 @@ SlashCmdList["PAWNSTAR"] = function(msg)
         for slot, items in pairs(GO.bagItems) do
             print("  Slot " .. slot .. " can hold " .. #items .. " items:")
             for i, item in ipairs(items) do
-                print(string.format("    Item %d: [%s] bag=%d slot=%d score=%.1f BoE=%s", i, item.link, item.bag, item.slot, item.score, tostring(item.isBoE or false)))
+                local _, _, _, _, itemMinLevel = GetItemInfo(item.link)
+                print(string.format("    Item %d: [%s] bag=%d slot=%d score=%.1f BoE=%s MinLvl=%s", 
+                    i, item.link, item.bag, item.slot, item.score, tostring(item.isBoE or false), tostring(itemMinLevel)))
             end
         end
     elseif msg == "pawn" then
