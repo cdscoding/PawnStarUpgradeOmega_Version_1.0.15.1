@@ -280,108 +280,76 @@ function GO:ScanBagItemsWithOptions()
     self:DebugPrint(string.format("=== BAG SCAN END - Found %d items, processed %d ===", totalItemsFound, totalItemsProcessed))
 end
 
-function GO:GetItemStats(itemLink, isEquipped)
+function GO:GetItemStats(itemLink)
     local stats = {}
     local itemName = GetItemInfo(itemLink)
-    
-    -- Debug which method we're using
-    if isEquipped then
-        self:DebugPrint(string.format("  Getting stats for EQUIPPED item: %s", itemName or "Unknown"))
-    else
-        self:DebugPrint(string.format("  Getting stats for BAG item: %s", itemName or "Unknown"))
-    end
-    
-    if not self.scanTooltip then
-        self.scanTooltip = CreateFrame("GameTooltip", "PawnStarScanTooltip", nil, "GameTooltipTemplate")
-        self.scanTooltip:SetOwner(WorldFrame, "ANCHOR_NONE")
-    end
-    
-    self.scanTooltip:ClearLines()
-    self.scanTooltip:SetHyperlink(itemLink)
-    
-    -- Debug: Check how many lines the tooltip has
-    local numLines = self.scanTooltip:NumLines()
-    self:DebugPrint(string.format("  Tooltip has %d lines", numLines))
-    
-    for i = 1, numLines do
-        local line = _G["PawnStarScanTooltipTextLeft" .. i]
-        if line then
-            local text = line:GetText()
-            if text then
-                -- Debug every line for weapons
-                if itemName and (itemName:find("Blade") or itemName:find("Staff") or itemName:find("Sword") or itemName:find("Glaive")) then
-                    self:DebugPrint(string.format("    Line %d: %s", i, text))
-                end
-                
-                -- Try multiple patterns for stats
-                -- Pattern 1: +X Stat
-                local value, statType = text:match("%+(%d+) (.+)")
-                if value and statType then
-                    value = tonumber(value)
-                    self:DebugPrint(string.format("    Found stat (pattern 1): +%d %s", value, statType))
-                    
-                    if statType:find("Strength") then stats.strength = (stats.strength or 0) + value
-                    elseif statType:find("Agility") then stats.agility = (stats.agility or 0) + value
-                    elseif statType:find("Intellect") then stats.intellect = (stats.intellect or 0) + value
-                    elseif statType:find("Stamina") then stats.stamina = (stats.stamina or 0) + value
-                    elseif statType:find("Critical Strike") then stats.criticalStrike = (stats.criticalStrike or 0) + value
-                    elseif statType:find("Haste") then stats.haste = (stats.haste or 0) + value
-                    elseif statType:find("Mastery") then stats.mastery = (stats.mastery or 0) + value
-                    elseif statType:find("Versatility") then stats.versatility = (stats.versatility or 0) + value
-                    end
-                end
-                
-                -- Pattern 2: Equip: increases/improves...
-                local equipValue = text:match("Equip: Increases your .- by (%d+)")
-                if equipValue then
-                    equipValue = tonumber(equipValue)
-                    self:DebugPrint(string.format("    Found equip effect: %d from '%s'", equipValue, text))
-                    -- You may need to parse these differently based on the exact text
-                end
-                
-                -- Pattern 3: X Armor
-                local armor = text:match("(%d+) Armor")
-                if armor then 
-                    stats.armor = tonumber(armor)
-                    self:DebugPrint(string.format("    Found armor: %d", stats.armor))
-                end
+    self:DebugPrint(string.format("  Getting stats for: %s", itemName or "Unknown"))
+
+    -- Preferred Method: C_Item.GetItemStats API for efficiency
+    local itemStatsTable = C_Item.GetItemStats(itemLink)
+    if itemStatsTable and next(itemStatsTable) then
+        self:DebugPrint("    Using C_Item.GetItemStats API")
+        for statName, value in pairs(itemStatsTable) do
+            if statName == "ITEM_MOD_STAMINA_SHORT" then stats.stamina = value
+            elseif statName == "ITEM_MOD_INTELLECT_SHORT" then stats.intellect = value
+            elseif statName == "ITEM_MOD_AGILITY_SHORT" then stats.agility = value
+            elseif statName == "ITEM_MOD_STRENGTH_SHORT" then stats.strength = value
+            elseif statName == "ITEM_MOD_HASTE_RATING_SHORT" then stats.haste = value
+            elseif statName == "ITEM_MOD_CRITICAL_STRIKE_RATING_SHORT" then stats.criticalStrike = value
+            elseif statName == "ITEM_MOD_MASTERY_RATING_SHORT" then stats.mastery = value
+            elseif statName == "ITEM_MOD_VERSATILITY" then stats.versatility = value
             end
         end
-    end
-    
-    -- Fallback/Merge with C_Item.GetItemStats for robustness, especially for weapons
-    local itemStatsTable = C_Item.GetItemStats(itemLink)
-    if itemStatsTable then
-        local apiStats = {}
-        for statName, value in pairs(itemStatsTable) do
-            if statName == "ITEM_MOD_STAMINA_SHORT" then apiStats.stamina = value
-            elseif statName == "ITEM_MOD_INTELLECT_SHORT" then apiStats.intellect = value
-            elseif statName == "ITEM_MOD_AGILITY_SHORT" then apiStats.agility = value
-            elseif statName == "ITEM_MOD_STRENGTH_SHORT" then apiStats.strength = value
-            elseif statName == "ITEM_MOD_HASTE_RATING_SHORT" then apiStats.haste = value
-            elseif statName == "ITEM_MOD_CRITICAL_STRIKE_RATING_SHORT" then apiStats.criticalStrike = value
-            elseif statName == "ITEM_MOD_MASTERY_RATING_SHORT" then apiStats.mastery = value
-            elseif statName == "ITEM_MOD_VERSATILITY" then apiStats.versatility = value
-            end
+    else
+        -- Fallback Method: Tooltip scanning for items where the API might fail
+        self:DebugPrint("    C_Item.GetItemStats failed, falling back to tooltip scan")
+        if not self.scanTooltip then
+            self.scanTooltip = CreateFrame("GameTooltip", "PawnStarScanTooltip", nil, "GameTooltipTemplate")
+            self.scanTooltip:SetOwner(WorldFrame, "ANCHOR_NONE")
         end
         
-        for stat, value in pairs(apiStats) do
-            if not stats[stat] then
-                self:DebugPrint(string.format("    Merging API stat for '%s': %s = %d", itemName or "Unknown", stat, value))
-                stats[stat] = value
+        self.scanTooltip:ClearLines()
+        self.scanTooltip:SetHyperlink(itemLink)
+        
+        local numLines = self.scanTooltip:NumLines()
+        for i = 1, numLines do
+            local line = _G["PawnStarScanTooltipTextLeft" .. i]
+            if line then
+                local text = line:GetText()
+                if text then
+                    local value, statType = text:match("%+(%d+) (.+)")
+                    if value and statType then
+                        value = tonumber(value)
+                        if statType:find("Strength") then stats.strength = (stats.strength or 0) + value
+                        elseif statType:find("Agility") then stats.agility = (stats.agility or 0) + value
+                        elseif statType:find("Intellect") then stats.intellect = (stats.intellect or 0) + value
+                        elseif statType:find("Stamina") then stats.stamina = (stats.stamina or 0) + value
+                        elseif statType:find("Critical Strike") then stats.criticalStrike = (stats.criticalStrike or 0) + value
+                        elseif statType:find("Haste") then stats.haste = (stats.haste or 0) + value
+                        elseif statType:find("Mastery") then stats.mastery = (stats.mastery or 0) + value
+                        elseif statType:find("Versatility") then stats.versatility = (stats.versatility or 0) + value
+                        end
+                    end
+                    
+                    local armor = text:match("(%d+) Armor")
+                    if armor then 
+                        stats.armor = tonumber(armor)
+                    end
+                end
             end
         end
     end
 
     -- Summary of stats found
     local statCount = 0
-    for stat, value in pairs(stats) do
+    for _ in pairs(stats) do
         statCount = statCount + 1
     end
     self:DebugPrint(string.format("  Total stats found: %d", statCount))
     
     return stats
 end
+
 
 function GO:CalculateItemScore(stats)
     local weights, scaleName = self:GetCurrentStatWeights()
@@ -514,4 +482,3 @@ end
 function GO:CompareGear()
     self:CompareGearWithOptions()
 end
-

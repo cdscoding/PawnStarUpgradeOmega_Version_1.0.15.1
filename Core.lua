@@ -10,6 +10,7 @@ GO.playerClass = nil
 GO.playerSpec = nil
 GO.animationTimer = nil
 GO.currentArrowFrame = 1
+GO.scanThrottleTimer = nil -- Timer for throttling gear scans
 
 -- Audio system for upgrade notifications
 GO.soundFiles = {
@@ -311,6 +312,18 @@ function GO:PrintDebugInfo()
     end
 end
 
+-- Function to handle throttled scanning
+function GO:RequestThrottledScan()
+    if self.scanThrottleTimer then
+        self.scanThrottleTimer:Cancel()
+    end
+    self.scanThrottleTimer = C_Timer.After(2.5, function()
+        self:DebugPrint("Throttled scan initiated.")
+        self:ScanGearWithOptions()
+        self.scanThrottleTimer = nil
+    end)
+end
+
 -- Event handling
 local eventFrame = CreateFrame("Frame")
 eventFrame:RegisterEvent("ADDON_LOADED")
@@ -338,8 +351,6 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
         end
         C_Timer.After(5, function() GO:ScanGearWithOptions() end)
     elseif event == "PLAYER_EQUIPMENT_CHANGED" or event == "BAG_UPDATE" then
-        C_Timer.After(1.5, function() GO:ScanGearWithOptions() end)
+        GO:RequestThrottledScan()
     end
 end)
-
-
