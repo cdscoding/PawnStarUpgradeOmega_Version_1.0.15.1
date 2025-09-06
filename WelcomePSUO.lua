@@ -43,6 +43,10 @@ function Welcome:CreateWindow()
     ww:SetScript("OnDragStart", function(self) self:StartMoving() end)
     ww:SetScript("OnDragStop", function(self) self:StopMovingOrSizing() end)
     ww:SetClampedToScreen(true)
+    
+    -- Set strata for the close button to match the parent frame
+    ww.CloseButton:SetFrameStrata(ww:GetFrameStrata())
+    ww.CloseButton:SetFrameLevel(ww:GetFrameLevel() + 1)
     ww.CloseButton:SetScript("OnClick", function() Welcome:HideWindow() end)
 
     -- Tutorial Text
@@ -142,4 +146,3 @@ end
 function Welcome:ToggleWindow()
     if not Welcome.Window or not Welcome.Window:IsShown() then Welcome:ShowWindow() else Welcome:HideWindow() end
 end
-

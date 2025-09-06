@@ -81,6 +81,22 @@ local basicFallbackWeights = {
         mastery = 0.60,
         versatility = 0.60,
         stamina = 0.10
+    },
+    -- Fallback for characters without a specialization (pre-level 10)
+    NO_SPEC = {
+        WARRIOR =       { strength = 1.0, stamina = 0.5 },
+        PALADIN =       { strength = 1.0, stamina = 0.5 },
+        HUNTER =        { agility = 1.0, stamina = 0.5 },
+        ROGUE =         { agility = 1.0, stamina = 0.5 },
+        PRIEST =        { intellect = 1.0, stamina = 0.5 },
+        DEATHKNIGHT =   { strength = 1.0, stamina = 0.5 },
+        SHAMAN =        { agility = 1.0, intellect = 1.0, stamina = 0.5 },
+        MAGE =          { intellect = 1.0, stamina = 0.5 },
+        WARLOCK =       { intellect = 1.0, stamina = 0.5 },
+        MONK =          { agility = 1.0, stamina = 0.5 },
+        DRUID =         { agility = 1.0, intellect = 1.0, stamina = 0.5 },
+        DEMONHUNTER =   { agility = 1.0, stamina = 0.5 },
+        EVOKER =        { intellect = 1.0, stamina = 0.5 },
     }
 }
 
@@ -200,9 +216,11 @@ function GO:GetDefaultPawnScaleForSpec()
     end
     
     local specID = GetSpecialization()
-    if not specID then return nil, nil end
+    if not specID or specID == 0 then return nil, nil end
     
     local _, specName = GetSpecializationInfo(specID)
+    if not specName then return nil, nil end -- Ensure spec is valid
+    
     local _, classFile = UnitClass("player")
     
     local availableScales = self:GetAllAvailablePawnScales()
@@ -213,19 +231,19 @@ function GO:GetDefaultPawnScaleForSpec()
     local bestMatch = nil
     local bestMatchName = nil
     
-    -- Look for class + spec number pattern first (most specific)
+    -- Look for class + spec name pattern (more reliable than ID)
     for scaleName, scaleInfo in pairs(availableScales) do
         local lowerName = string.lower(scaleInfo.displayName)
         local lowerClassName = string.lower(classFile)
-        local pattern = lowerClassName .. " " .. specID
-        if string.find(lowerName, pattern) then
+        local lowerSpecName = string.lower(specName)
+        if string.find(lowerName, lowerClassName) and string.find(lowerName, lowerSpecName) then
             bestMatch = scaleInfo.values
             bestMatchName = scaleName
             break
         end
     end
     
-    -- Look for spec name match
+    -- Look for spec name match only
     if not bestMatch then
         for scaleName, scaleInfo in pairs(availableScales) do
             local lowerName = string.lower(scaleInfo.displayName)
@@ -238,7 +256,7 @@ function GO:GetDefaultPawnScaleForSpec()
         end
     end
     
-    -- Look for class match
+    -- Look for class name match only
     if not bestMatch then
         local lowerClassName = string.lower(classFile)
         for scaleName, scaleInfo in pairs(availableScales) do
@@ -254,30 +272,48 @@ function GO:GetDefaultPawnScaleForSpec()
     return bestMatch, bestMatchName
 end
 
+
 function GO:GetBasicFallbackWeights()
     local specID = GetSpecialization()
-    if not specID then 
-        return {}, "No Spec Selected" 
+    local className, classFile = UnitClass("player")
+    local specName = specID and GetSpecializationInfo(specID)
+    
+    if not specName then
+        -- Handle characters without a specialization (pre-level 10)
+        if basicFallbackWeights.NO_SPEC[classFile] then
+            return basicFallbackWeights.NO_SPEC[classFile], "Basic Fallback (" .. className .. ")"
+        else
+            -- Ultra-basic fallback if class not found
+            return { strength = 1, agility = 1, intellect = 1, stamina = 0.5 }, "Ultra-Basic Fallback"
+        end
     end
     
-    local _, specName, _, _, role = GetSpecializationInfo(specID)
+    local _, _, _, _, role = GetSpecializationInfo(specID)
     
     if basicFallbackWeights[role] then
         return basicFallbackWeights[role], "Basic Fallback (" .. specName .. ")"
     end
     
-    -- Ultra-basic fallback
+    -- Ultra-basic fallback if role is somehow unknown
     return { strength = 1, agility = 1, intellect = 1, stamina = 0.5 }, "Ultra-Basic Fallback"
 end
 
 function GO:GetCurrentStatWeights()
-    -- Priority 1: Try to use Pawn if available
+    local specID = GetSpecialization()
+    local specName = specID and GetSpecializationInfo(specID)
+
+    -- Priority 1: If no spec is learned, always use the class-based fallback.
+    if not specName then
+        self:DebugPrint("No specialization learned. Using class-based fallback weights.")
+        return self:GetBasicFallbackWeights()
+    end
+
+    -- Priority 2: Try to use Pawn if available and a spec is learned
     if self:IsPawnAvailable() then
         local selectedScale = PawnStarOmegaDB.selectedPawnScale
         local pawnWeights = nil
         local scaleName = nil
         
-        -- Use selected scale or find best default
         if selectedScale and selectedScale ~= "AUTO" then
             pawnWeights, scaleName = self:GetPawnScaleByName(selectedScale)
         end
@@ -286,7 +322,6 @@ function GO:GetCurrentStatWeights()
             pawnWeights, scaleName = self:GetDefaultPawnScaleForSpec()
         end
         
-        -- Convert Pawn weights to our format
         if pawnWeights and scaleName then
             local convertedWeights = {}
             for pawnStat, value in pairs(pawnWeights) do
@@ -302,15 +337,16 @@ function GO:GetCurrentStatWeights()
                 if availableScales[scaleName] then
                     displayName = availableScales[scaleName].displayName
                 end
+                self:DebugPrint("Using Pawn stat weights from scale: " .. displayName)
                 return convertedWeights, "Pawn: " .. displayName
             end
         end
     end
     
-    -- Priority 2: Use basic fallback weights
+    -- Priority 3: Use role-based fallback if spec is learned but Pawn fails or isn't installed
+    self:DebugPrint("Using role-based fallback weights.")
     local fallbackWeights, fallbackName = self:GetBasicFallbackWeights()
     
-    -- Show Pawn recommendation on first use (but not every time)
     if not PawnStarOmegaDB.hasShownPawnRecommendation then
         PawnStarOmegaDB.hasShownPawnRecommendation = true
         C_Timer.After(2, function()
@@ -425,12 +461,16 @@ function GO:UpdateStatWeightsPanel()
     end
     
     local specID = GetSpecialization()
-    if not specID then return end
-    
-    local _, specName = GetSpecializationInfo(specID)
     local className, classFile = UnitClass("player")
     local classColor = RAID_CLASS_COLORS[classFile]
-
+    
+    local specName
+    if specID and GetSpecializationInfo(specID) then
+        _, specName = GetSpecializationInfo(specID)
+    else
+        specName = "No Specialization"
+    end
+    
     local weights, scaleName = self:GetCurrentStatWeights()
     
     if not weights or not next(weights) then
@@ -585,6 +625,11 @@ function GO:CreateStatWeightsPanel()
     f.title = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     f.title:SetPoint("TOP", f.TitleBg, "TOP", 0, -5)
     f.title:SetText("Current Stat Weights")
+
+    -- Override the default close button behavior and set strata
+    f.CloseButton:SetFrameStrata(f:GetFrameStrata())
+    f.CloseButton:SetFrameLevel(f:GetFrameLevel() + 1)
+    f.CloseButton:SetScript("OnClick", function() GO:ToggleOptionsPanel() end)
 
     f.specInfo = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     f.specInfo:SetPoint("TOP", f.title, "BOTTOM", 0, -15)

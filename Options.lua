@@ -27,165 +27,6 @@ function GO:UpdateOptionsPanel()
     self:UpdateStatWeightsPanel()
 end
 
--- Helper function to check if player is in combat
-function GO:IsInCombat()
-    return InCombatLockdown()
-end
-
--- Helper function to check if player is in a safe zone (rest area)
-function GO:IsInSafeZone()
-    return IsResting()
-end
-
--- Helper function to check if an item is Bind on Equip
-function GO:IsItemBindOnEquip(itemLink)
-    if not itemLink then return false end
-    
-    -- Create temporary tooltip to scan item binding info
-    if not self.bindScanTooltip then
-        self.bindScanTooltip = CreateFrame("GameTooltip", "PawnStarBindScanTooltip", nil, "GameTooltipTemplate")
-        self.bindScanTooltip:SetOwner(WorldFrame, "ANCHOR_NONE")
-    end
-    
-    self.bindScanTooltip:ClearLines()
-    self.bindScanTooltip:SetHyperlink(itemLink)
-    
-    -- Check tooltip lines for binding information
-    for i = 1, self.bindScanTooltip:NumLines() do
-        local line = _G["PawnStarBindScanTooltipTextLeft" .. i]
-        if line then
-            local text = line:GetText()
-            if text and (text:find("Binds when equipped") or text:find("Bind when Equipped")) then
-                return true
-            end
-        end
-    end
-    
-    return false
-end
-
--- Enhanced ScanGear function with new option checks
-function GO:ScanGearWithOptions()
-    -- Check if scanning should be paused in combat
-    if PawnStarOmegaDB.pauseInCombat and self:IsInCombat() then
-        self:DebugPrint("Gear scan skipped - player is in combat and pauseInCombat is enabled")
-        return
-    end
-    
-    -- Check if scanning should only happen in safe zones
-    if PawnStarOmegaDB.safeZonesOnly and not self:IsInSafeZone() then
-        self:DebugPrint("Gear scan skipped - player not in safe zone and safeZonesOnly is enabled")
-        return
-    end
-    
-    self:DebugPrint("ScanGear initiated with option checks passed.")
-    self:ScanEquippedGear()
-    self:ScanBagItemsWithOptions()
-    self:CompareGearWithOptions()
-end
-
--- Enhanced bag scanning with BoE filtering
-function GO:ScanBagItemsWithOptions()
-    self.bagItems = {}
-    self:DebugPrint("Scanning bag items with options...")
-    
-    for bag = 0, 4 do
-        for slot = 1, C_Container.GetContainerNumSlots(bag) do
-            local itemInfo = C_Container.GetContainerItemInfo(bag, slot)
-            if itemInfo and itemInfo.hyperlink then
-                -- Check if we should ignore BoE items
-                if PawnStarOmegaDB.ignoreBoE and self:IsItemBindOnEquip(itemInfo.hyperlink) then
-                    self:DebugPrint("Skipping BoE item: " .. itemInfo.hyperlink)
-                else
-                    if self:IsItemEquippableByClass(itemInfo.hyperlink) then
-                        local equipSlot = self:GetItemEquipSlot(itemInfo.hyperlink)
-                        if equipSlot then
-                            local stats = self:GetItemStats(itemInfo.hyperlink)
-                            local score = self:CalculateItemScore(stats)
-                            local slotsToCheck = type(equipSlot) == "table" and equipSlot or {equipSlot}
-                            
-                            for _, slotNum in ipairs(slotsToCheck) do
-                                -- Apply showOneRing option for ring slots
-                                local shouldSkip = false
-                                if PawnStarOmegaDB.showOneRing and (slotNum == 11 or slotNum == 12) then
-                                    -- Only show for ring slot 11 when showOneRing is enabled
-                                    if slotNum == 12 then
-                                        self:DebugPrint("Skipping ring slot 2 due to showOneRing option")
-                                        shouldSkip = true
-                                    end
-                                end
-                                
-                                if not shouldSkip then
-                                    if not self.bagItems[slotNum] then self.bagItems[slotNum] = {} end
-                                    table.insert(self.bagItems[slotNum], {
-                                        link = itemInfo.hyperlink, 
-                                        stats = stats,
-                                        score = score, 
-                                        bag = bag, 
-                                        slot = slot,
-                                        isBoE = self:IsItemBindOnEquip(itemInfo.hyperlink)
-                                    })
-                                    self:DebugPrint(string.format("  Found suitable item [%s] for slot %d. Score: %.2f, BoE: %s", 
-                                        itemInfo.hyperlink, slotNum, score, tostring(self:IsItemBindOnEquip(itemInfo.hyperlink))))
-                                end
-                            end
-                        end
-                    end
-                end
-            end
-        end
-    end
-end
-
--- Enhanced gear comparison with ring slot handling
-function GO:CompareGearWithOptions()
-    local upgrades = {}
-    self:DebugPrint("--- CompareGear Start (with options) ---")
-
-    for slotNum = 1, 18 do
-        -- Skip slots we don't handle (Shirt, Trinkets)
-        if slotNum ~= 4 and slotNum ~= 13 and slotNum ~= 14 then
-            -- Handle showOneRing option for ring slot 2
-            if PawnStarOmegaDB.showOneRing and slotNum == 12 then
-                self:DebugPrint("Skipping ring slot 2 comparison due to showOneRing option")
-            else
-                self:DebugPrint(string.format("Comparing slot %d (%s)", slotNum, self.slotNames[slotNum] or "Unknown"))
-                local equippedItem = self.equippedGear[slotNum]
-                local equippedScore = equippedItem and equippedItem.score or 0
-                self:DebugPrint(string.format("  Equipped Score: %.2f", equippedScore))
-
-                if self.bagItems[slotNum] then
-                    for _, bagItem in ipairs(self.bagItems[slotNum]) do
-                        if not equippedItem or bagItem.score > equippedScore then
-                            self:DebugPrint(string.format("  FOUND UPGRADE for slot %d: [%s] (Score: %.2f) vs Equipped (Score: %.2f). Empty slot: %s, BoE: %s", 
-                                slotNum, bagItem.link, bagItem.score, equippedScore, tostring(not equippedItem), tostring(bagItem.isBoE or false)))
-                            table.insert(upgrades, {
-                                slot = slotNum,
-                                upgrade = bagItem,
-                                improvement = bagItem.score - equippedScore
-                            })
-                        else
-                             self:DebugPrint(string.format("  Item NOT an upgrade for slot %d: [%s] (Score: %.2f) vs Equipped (Score: %.2f).", 
-                                 slotNum, bagItem.link, bagItem.score, equippedScore))
-                        end
-                    end
-                else
-                     self:DebugPrint("  No suitable bag items found for this slot.")
-                end
-            end
-        end
-    end
-
-    table.sort(upgrades, function(a, b) return a.improvement > b.improvement end)
-    
-    if #upgrades > 0 and not self.frame:IsShown() then
-        self:PlayUpgradeSound()
-    end
-    
-    self:DebugPrint(string.format("--- CompareGear End (with options) --- Found %d total upgrades.", #upgrades))
-    self:DisplayUpgrades(upgrades)
-end
-
 function GO:UpdatePawnStatusDisplay()
     if not self.optionsFrame or not self.optionsFrame.pawnStatus then return end
     
@@ -237,7 +78,12 @@ function GO:CreateOptionsPanel()
     
     f.title = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     f.title:SetPoint("TOP", f.TitleBg, "TOP", 0, -5)
-    f.title:SetText(addonName .. " Version 1.0.9")
+    f.title:SetText(addonName .. " Version 1.0.15")
+    
+    -- Override the default close button behavior and set strata
+    f.CloseButton:SetFrameStrata(f:GetFrameStrata())
+    f.CloseButton:SetFrameLevel(f:GetFrameLevel() + 1)
+    f.CloseButton:SetScript("OnClick", function() GO:ToggleOptionsPanel() end)
     
     self.optionsFrame = f
 
@@ -269,6 +115,15 @@ function GO:CreateOptionsPanel()
     deleteButton:SetText("Reset Addon Data")
     deleteButton:SetScript("OnClick", function()
         GO:RequestWipeConfirmation()
+    end)
+    
+    -- Blocked Items Button
+    local blockedItemsButton = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    blockedItemsButton:SetSize(160, 25)
+    blockedItemsButton:SetPoint("TOP", deleteButton, "BOTTOM", 0, -5)
+    blockedItemsButton:SetText("Blocked Items")
+    blockedItemsButton:SetScript("OnClick", function()
+        GO.BlockedItems:TogglePanel()
     end)
 
     -- Install Pawn button (initially hidden)
@@ -517,6 +372,10 @@ function GO:CreateSupportWindow()
     sw:SetScript("OnDragStart", function(self) self:StartMoving() end)
     sw:SetScript("OnDragStop", function(self) self:StopMovingOrSizing() end)
     sw:SetClampedToScreen(true)
+    
+    -- Set strata for the close button to match the parent frame
+    sw.CloseButton:SetFrameStrata(sw:GetFrameStrata())
+    sw.CloseButton:SetFrameLevel(sw:GetFrameLevel() + 1)
     sw.CloseButton:SetScript("OnClick", function() GO:HideSupportWindow() end)
 
     -- Top text block
@@ -615,6 +474,9 @@ function GO:ToggleOptionsPanel()
         self.optionsFrame:Hide()
         if self.statWeightsFrame then
             self.statWeightsFrame:Hide()
+        end
+        if GO.BlockedItems.Frame and GO.BlockedItems.Frame:IsShown() then
+            GO.BlockedItems.Frame:Hide()
         end
     else
         self:UpdateOptionsPanel()
