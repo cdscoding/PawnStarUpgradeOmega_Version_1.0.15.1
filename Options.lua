@@ -78,7 +78,7 @@ function GO:CreateOptionsPanel()
     
     f.title = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     f.title:SetPoint("TOP", f.TitleBg, "TOP", 0, -5)
-    f.title:SetText(addonName .. " Version 1.0.15.1")
+    f.title:SetText(addonName .. " Version 1.0.15.2")
     
     -- Override the default close button behavior and set strata
     f.CloseButton:SetFrameStrata(f:GetFrameStrata())
