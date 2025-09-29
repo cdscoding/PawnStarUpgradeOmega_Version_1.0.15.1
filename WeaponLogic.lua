@@ -522,8 +522,19 @@ function GO:CompareGearWithOptions()
 
     table.sort(upgrades, function(a, b) return a.improvement > b.improvement end)
     
-    if #upgrades > 0 and not self.frame:IsShown() then
-        self:PlayUpgradeSound()
+    if #upgrades > 0 then
+        if not self.frame:IsShown() then
+            self:PlayUpgradeSound()
+        end
+        -- If scanning was paused, restart it because we found an upgrade.
+        if self.scanningPaused then
+            self:StartScanning()
+        end
+    else
+        -- No upgrades found, pause the periodic scan to save resources.
+        if not self.scanningPaused then
+            self:StopScanning()
+        end
     end
     
     self:DisplayUpgrades(upgrades)

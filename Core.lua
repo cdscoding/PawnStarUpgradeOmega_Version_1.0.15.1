@@ -6,6 +6,7 @@ local GO = PawnStarUpgradeOmega
 
 -- Core variables
 GO.scanTimer = nil
+GO.scanningPaused = false -- Flag to track if the periodic scan is paused
 GO.playerClass = nil
 GO.playerSpec = nil
 GO.animationTimer = nil
@@ -43,6 +44,8 @@ end
 
 function GO:PlayUpgradeSound()
     if not PawnStarOmegaDB.soundEnabled then return end
+    -- The sound playback is asynchronous, but the triggering scan is heavy. 
+    -- We ensure the scan is delayed to prevent client freeze.
     local randomIndex = math.random(1, #self.soundFiles)
     PlaySoundFile(self.soundFiles[randomIndex], "Master")
 end
@@ -112,6 +115,8 @@ function GO:OnLoad()
     self:CreateMainFrame()
     self:CreateMinimapIcon()
     self:StartArrowAnimation()
+    
+    -- The periodic scan timer is started here, but the first scan execution is deferred.
     self:StartScanning()
 
     print("|cff00ff00" .. addonName .. " loaded!|r Type |cffffffff/pawnstar|r to open. " ..
@@ -202,7 +207,19 @@ end
 
 function GO:StartScanning()
     if self.scanTimer then self.scanTimer:Cancel() end
+    -- The periodic ticker is still set to 6 seconds.
     self.scanTimer = C_Timer.NewTicker(6, function() self:ScanGearWithOptions() end)
+    self.scanningPaused = false
+    self:DebugPrint("Periodic scanning restarted.")
+end
+
+function GO:StopScanning()
+    if self.scanTimer then
+        self.scanTimer:Cancel()
+        self.scanTimer = nil
+        self.scanningPaused = true
+        self:DebugPrint("No upgrades found. Pausing periodic scan to reduce lag.")
+    end
 end
 
 function GO:StartArrowAnimation()
@@ -314,6 +331,7 @@ end
 
 -- Function to handle throttled scanning
 function GO:RequestThrottledScan()
+    -- This throttle timer is still used for BAG_UPDATE and PLAYER_EQUIPMENT_CHANGED
     if self.scanThrottleTimer then
         self.scanThrottleTimer:Cancel()
     end
@@ -330,6 +348,7 @@ eventFrame:RegisterEvent("ADDON_LOADED")
 eventFrame:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
 eventFrame:RegisterEvent("BAG_UPDATE")
 eventFrame:RegisterEvent("PLAYER_LOGIN")
+-- The previously added 'UI_FINISHED' event caused an error and has been removed.
 
 eventFrame:SetScript("OnEvent", function(self, event, ...)
     if event == "ADDON_LOADED" then
@@ -342,14 +361,24 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
             end)
         end
     elseif event == "PLAYER_LOGIN" then
+        -- Handle welcome window display
         if PawnStarOmegaDB and PawnStarOmegaDB.settings and PawnStarOmegaDB.settings.showWelcomeWindow then
+            -- Delay welcome window slightly to allow for full screen load
             C_Timer.After(3, function()
                 if GO.Welcome and GO.Welcome.ShowWindow then
                     GO.Welcome:ShowWindow()
                 end
             end)
         end
-        C_Timer.After(5, function() GO:ScanGearWithOptions() end)
+        
+        -- FIX: Re-enabling the initial heavy gear scan with a 5-second delay on PLAYER_LOGIN.
+        -- This ensures the client is past the critical loading phase before the CPU-intensive
+        -- scan (and subsequent sound notification) is triggered, preventing the client freeze.
+        GO:DebugPrint("PLAYER_LOGIN detected. Initiating first full gear scan (delayed 5s).")
+        C_Timer.After(5, function() 
+            GO:ScanGearWithOptions() 
+        end)
+
     elseif event == "PLAYER_EQUIPMENT_CHANGED" or event == "BAG_UPDATE" then
         GO:RequestThrottledScan()
     end
