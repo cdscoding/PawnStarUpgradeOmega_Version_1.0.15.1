@@ -65,7 +65,9 @@ function GO:OnLoad()
         safeZonesOnly = false,
         ignoreBoE = false,
         showOneRing = false,
-        blockedItems = {}
+        blockedItems = {},
+        -- NEW: Store character/realm-specific saved builds
+        savedBuilds = {}
     }
 
     -- Initialize or update the database
@@ -91,6 +93,11 @@ function GO:OnLoad()
     -- Add blockedItems table for users updating the addon
     if PawnStarOmegaDB.blockedItems == nil then
         PawnStarOmegaDB.blockedItems = {}
+    end
+
+    -- Add savedBuilds table for users updating the addon
+    if PawnStarOmegaDB.savedBuilds == nil then
+        PawnStarOmegaDB.savedBuilds = {}
     end
 
     -- Clean up old variables
@@ -124,8 +131,9 @@ function GO:OnLoad()
 end
 
 function GO:CreateMainFrame()
+    -- Increased width from 400 to 500
     self.frame = CreateFrame("Frame", addonName .. "Frame", UIParent, "BasicFrameTemplateWithInset")
-    self.frame:SetSize(600, 500)
+    self.frame:SetSize(500, 250) 
     self.frame:SetPoint("CENTER")
     self.frame:SetFrameStrata("TOOLTIP")
     self.frame:SetFrameLevel(25) -- Set below Blocked Items (30) but above Options/StatWeights (DIALOG)
@@ -139,32 +147,32 @@ function GO:CreateMainFrame()
     self.frame.CloseButton:SetFrameStrata(self.frame:GetFrameStrata())
     self.frame.CloseButton:SetFrameLevel(self.frame:GetFrameLevel() + 1)
 
-    -- Add Logo
+    -- Add Logo (Increased size by 20%: 64 -> 77)
     self.frame.logo = self.frame:CreateTexture(nil, "ARTWORK")
-    self.frame.logo:SetSize(128, 128)
+    self.frame.logo:SetSize(77, 77) 
     self.frame.logo:SetTexture("Interface\\AddOns\\" .. addonName .. "\\Media\\PawnStarUpgradeOmegaLogo.tga")
-    self.frame.logo:SetPoint("TOP", self.frame, "TOP", 0, -10)
+    self.frame.logo:SetPoint("TOP", self.frame, "TOP", 0, -5) 
 
-    -- Create animated arrows
+    -- Create animated arrows (Increased size by 20%: 32 -> 38)
     self.frame.arrowLeft = self.frame:CreateTexture(nil, "ARTWORK")
-    self.frame.arrowLeft:SetSize(64, 64)
-    self.frame.arrowLeft:SetPoint("RIGHT", self.frame.logo, "LEFT", -10, 0)
+    self.frame.arrowLeft:SetSize(38, 38) 
+    self.frame.arrowLeft:SetPoint("RIGHT", self.frame.logo, "LEFT", -5, 0) 
 
     self.frame.arrowRight = self.frame:CreateTexture(nil, "ARTWORK")
-    self.frame.arrowRight:SetSize(64, 64)
-    self.frame.arrowRight:SetPoint("LEFT", self.frame.logo, "RIGHT", 10, 0)
+    self.frame.arrowRight:SetSize(38, 38) 
+    self.frame.arrowRight:SetPoint("LEFT", self.frame.logo, "RIGHT", 5, 0) 
 
     self.frame.title = self.frame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     self.frame.title:SetPoint("TOP", self.frame.TitleBg, "TOP", 0, -5)
     self.frame.title:SetText("Gear Upgrades")
 
-    -- Create scroll frame for results
+    -- Create scroll frame for results (adjusted width)
     self.scrollFrame = CreateFrame("ScrollFrame", nil, self.frame, "UIPanelScrollFrameTemplate")
-    self.scrollFrame:SetPoint("TOPLEFT", 10, -150)
-    self.scrollFrame:SetPoint("BOTTOMRIGHT", -30, 10)
+    self.scrollFrame:SetPoint("TOPLEFT", 5, -75) 
+    self.scrollFrame:SetPoint("BOTTOMRIGHT", -15, 5) 
 
     self.content = CreateFrame("Frame")
-    self.content:SetSize(550, 1)
+    self.content:SetSize(475, 1) -- Increased internal content width from 375 to 475
     self.scrollFrame:SetScrollChild(self.content)
 
     self.frame:Hide()

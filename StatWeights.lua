@@ -4,6 +4,67 @@
 local addonName = "PawnStarUpgradeOmega"
 local GO = _G[addonName]
 
+-- Helper to generate a character-realm specific key for saved builds.
+local function GetCharRealmKey()
+    -- Use UnitName for character name and GetRealmName for realm.
+    local name, realm = UnitName("player"), GetRealmName()
+    return name .. "_" .. realm
+end
+
+-- NEW: Function to save the currently selected scale as the default for the character/realm
+function GO:SaveCurrentBuild()
+    local currentScale = PawnStarOmegaDB.selectedPawnScale
+    if not currentScale then 
+        print("|cffff0000PawnStarUpgradeOmega:|r Cannot save build: No scale currently selected.")
+        return 
+    end
+
+    local key = GetCharRealmKey()
+    PawnStarOmegaDB.savedBuilds[key] = currentScale
+
+    local scaleDisplayName = "Auto-detect"
+    if currentScale ~= "AUTO" then
+        local availableScales = self:GetAllAvailablePawnScales()
+        if availableScales[currentScale] then
+            scaleDisplayName = availableScales[currentScale].displayName
+        end
+    end
+    
+    print(string.format("|cff00ff00PawnStarUpgradeOmega:|r Saved '%s' as the default build for %s. This is now the default scale upon login.", scaleDisplayName, key))
+    GO:UpdateStatWeightsPanel()
+end
+
+-- NEW: Function to load the default scale if saved
+function GO:LoadDefaultBuild()
+    local key = GetCharRealmKey()
+    local savedScale = PawnStarOmegaDB.savedBuilds[key]
+    
+    -- CRITICAL FIX: If a saved scale exists for THIS character/realm, load it.
+    if savedScale then
+        if PawnStarOmegaDB.selectedPawnScale ~= savedScale then
+            PawnStarOmegaDB.selectedPawnScale = savedScale
+            
+            local scaleDisplayName = "Auto-detect"
+            if savedScale ~= "AUTO" then
+                 local availableScales = self:GetAllAvailablePawnScales()
+                 if availableScales[savedScale] then
+                     scaleDisplayName = availableScales[savedScale].displayName
+                 end
+            end
+            self:DebugPrint("Loaded saved default build: " .. scaleDisplayName)
+            return true
+        end
+    else
+        -- FIX FOR NEW CHARACTERS: If no saved scale exists for this character/realm, 
+        -- we explicitly reset the currently loaded value to "AUTO" so it uses the
+        -- class default and doesn't inherit the last saved setting from another character.
+        PawnStarOmegaDB.selectedPawnScale = "AUTO"
+        self:DebugPrint("No saved build found for this character/realm. Defaulting to AUTO.")
+    end
+
+    return false
+end
+
 -- Stat display names for a more user-friendly presentation
 local statDisplayNames = {
     strength = "Strength",
@@ -361,8 +422,7 @@ function GO:CreateScaleDropdown()
     if not self.statWeightsFrame then return end
     
     local dropdown = CreateFrame("Frame", addonName .. "ScaleDropdown", self.statWeightsFrame, "UIDropDownMenuTemplate")
-    dropdown:SetPoint("TOP", self.statWeightsFrame.scaleInfo, "BOTTOM", 0, -10)
-    UIDropDownMenu_SetWidth(dropdown, 300)
+    UIDropDownMenu_SetWidth(dropdown, 250) -- Adjusted width for positioning the button
     
     if self:IsPawnAvailable() then
         UIDropDownMenu_SetText(dropdown, "Select Pawn Scale...")
@@ -376,8 +436,10 @@ function GO:CreateScaleDropdown()
             return
         end
         
+        -- CRITICAL FIX: Directly update the selected scale when clicked.
         PawnStarOmegaDB.selectedPawnScale = self.value
-        UIDropDownMenu_SetText(dropdown, self:GetText())
+        
+        -- Now force a full UI refresh using the newly selected scale.
         GO:UpdateStatWeightsPanel()
         GO:ScanGear()
     end
@@ -494,7 +556,7 @@ function GO:UpdateStatWeightsPanel()
 
     f.scaleInfo:SetText(scaleName)
 
-    -- Update dropdown text
+    -- Update dropdown text and save button status
     if self.scaleDropdown then
         if self:IsPawnAvailable() then
             local selectedScale = PawnStarOmegaDB.selectedPawnScale
@@ -511,6 +573,25 @@ function GO:UpdateStatWeightsPanel()
         else
             UIDropDownMenu_SetText(self.scaleDropdown, "Install Pawn for More Options")
         end
+        
+        -- Ensure save button is permanently enabled and labeled "Save" (NO LOCKING)
+        local saveButton = _G[addonName .. "SaveWeightsButton"]
+
+        if saveButton then
+            local normalTexture = saveButton:GetNormalTexture()
+            local highlightTexture = saveButton:GetHighlightTexture()
+            
+            saveButton:SetText("Save")
+            saveButton:SetEnabled(true)
+            
+            -- Set button back to default appearance
+            if normalTexture then
+                normalTexture:SetVertexColor(1, 1, 1)
+            end
+            if highlightTexture then
+                highlightTexture:SetVertexColor(1, 1, 1, 0.5)
+            end
+        end
     end
 
     -- Add helpful hint for fallback weights
@@ -518,12 +599,13 @@ function GO:UpdateStatWeightsPanel()
         local hintText = f.hintText
         if not hintText then
             hintText = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-            hintText:SetPoint("TOP", f.scaleInfo, "BOTTOM", 0, -15)
             hintText:SetWidth(350)
             hintText:SetJustifyH("CENTER")
             hintText:SetTextColor(1, 0.6, 0.2)
             f.hintText = hintText
         end
+        -- Set the point to be below the scale info text, clearing the space for dropdown/button area
+        hintText:SetPoint("TOP", f.scaleInfo, "BOTTOM", 0, -40) 
         hintText:SetText("Install Pawn addon for accurate, personalized stat weights!")
         hintText:Show()
     else
@@ -533,7 +615,15 @@ function GO:UpdateStatWeightsPanel()
     end
 
     -- Display weights in two columns
-    local yOffset = self:IsPawnAvailable() and -140 or -160 -- Extra space for hint
+    -- Adjust starting point based on the content above.
+    local yOffsetStart
+    if self:IsPawnAvailable() then
+        yOffsetStart = -160 -- Start below the dropdown/button area
+    else
+        yOffsetStart = -200 -- Start below the dropdown/button area AND the expanded hint text
+    end
+    
+    local yOffset = yOffsetStart
     local xOffset = 30
     local i = 1
     local column = 1
@@ -557,6 +647,7 @@ function GO:UpdateStatWeightsPanel()
             statString = f:CreateFontString(addonName .. "StatString" .. i, "OVERLAY", "GameFontNormal")
             statString:SetJustifyH("LEFT")
         end
+        -- REVERTED: Remove C_Timer.After wrapper to ensure synchronous layout
         statString:SetPoint("TOPLEFT", xOffset, yOffset)
         statString:SetText(string.format("%s: %.2f", displayName, value))
         statString:Show()
@@ -567,7 +658,7 @@ function GO:UpdateStatWeightsPanel()
         if statsInColumn >= maxStatsPerColumn and column == 1 then
             column = 2
             statsInColumn = 0
-            yOffset = self:IsPawnAvailable() and -140 or -160
+            yOffset = yOffsetStart -- Reset yOffset for the second column
             xOffset = 220
         end
         i = i + 1
@@ -601,6 +692,10 @@ function GO:CreateStatWeightsPanel()
     f:SetPoint("LEFT", self.optionsFrame, "RIGHT", 10, 0)
     f:SetFrameStrata("DIALOG")
     
+    -- CRITICAL FIX: Load the saved default build immediately when the panel is created.
+    -- This ensures the starting state reflects the saved preference.
+    GO:LoadDefaultBuild()
+
     -- Register for spec change events
     f:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
     f:RegisterEvent("ACTIVE_TALENT_GROUP_CHANGED")
@@ -638,7 +733,47 @@ function GO:CreateStatWeightsPanel()
     f.scaleInfo:SetPoint("TOP", f.specInfo, "BOTTOM", 0, -5)
 
     self.statWeightsFrame = f
-    self:CreateScaleDropdown()
+    
+    -- Define widths manually 
+    local DROPDOWN_WIDTH = 250
+    local BUTTON_WIDTH = 50  -- Adjusted width
+    local SPACING = 2        -- Adjusted spacing
+    local totalWidth = DROPDOWN_WIDTH + BUTTON_WIDTH + SPACING
+    local frameWidth = 450
+    
+    -- Calculate offset needed to center the entire block (dropdown + button)
+    local centerOffset = (frameWidth / 2) - (totalWidth / 2)
+
+    -- Create the save button first, as the dropdown will anchor to it for centering
+    local saveButton = CreateFrame("Button", addonName .. "SaveWeightsButton", f, "UIPanelButtonTemplate")
+    saveButton:SetSize(BUTTON_WIDTH, 22) -- Button height kept at 22 for visual alignment with dropdown
+    saveButton:SetText("Save")
+    saveButton:SetScript("OnClick", function()
+        GO:SaveCurrentBuild()
+    end)
+    
+    -- Create the scale dropdown
+    local dropdown = self:CreateScaleDropdown()
+    
+    -- Center the entire block by anchoring the DROPDOWN's LEFT side using the calculated offset.
+    -- The Y coordinate is manually set to position it correctly beneath the scale info.
+    dropdown:SetPoint("TOPLEFT", f, "TOPLEFT", centerOffset, -110)
+    
+    -- Anchor the save button right next to the dropdown
+    -- We are anchoring the save button's LEFT to the dropdown's RIGHT using the minimal spacing.
+    saveButton:SetPoint("LEFT", dropdown, "RIGHT", SPACING, 0) 
+    saveButton:SetPoint("TOP", dropdown, "TOP", 0, 0)
+    
+    -- Tooltip for Save button
+    saveButton:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetText("Save Current Build", 1, 1, 1)
+        GameTooltip:AddLine("Saves the currently selected scale (or 'Auto-detect') as the default scale for this character/realm.", 1, 1, 1, true)
+        GameTooltip:Show()
+    end)
+    saveButton:SetScript("OnLeave", function()
+        GameTooltip:Hide()
+    end)
+    
     f:Hide()
 end
-
